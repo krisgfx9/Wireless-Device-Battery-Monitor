@@ -56,6 +56,8 @@ void PollMiscMice(PollContext& ctx);  // Motospeed X6, Delux M900 Pro, Ajazz AJ1
 void PollRazerHeadsets(PollContext& ctx);  // Razer BlackShark V3 / V3 Pro
 void PollKysona(PollContext& ctx);    // also Pulsar, ATK / VXE, Hitscan Hyperlight
 void PollHyperX(PollContext& ctx);
+void PollG435(PollContext& ctx);     // Logitech G435 on the Realtek receiver 046D:0ACB (read every 30 min)
+void G435RequestRead();               // make the next poll read the G435 now ("Refresh now")
 void PollLogitech(PollContext& ctx);
 void PollRazer(PollContext& ctx);
 void PollSteelSeries(PollContext& ctx);
