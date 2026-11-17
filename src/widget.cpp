@@ -1,26 +1,56 @@
 #include "widget.h"
 
 #include <commctrl.h>
+#include <uiautomation.h>
 #include <algorithm>
+#include <climits>
+#include <cmath>
+#include <memory>
 
 namespace {
 
-HWND g_wnd, g_taskbar, g_tip, g_notify, g_rebar;
+// One strip per taskbar: the primary one (Shell_TrayWnd, anchored left of TrayNotifyWnd) and one per
+// secondary-monitor taskbar (Shell_SecondaryTrayWnd, anchored left of its clock, found through UI
+// Automation because the Windows 11 secondary taskbar has no child windows for it).
+struct Bar {
+    HWND taskbar = nullptr, wnd = nullptr, rebar = nullptr;
+    bool primary = false;
+    bool xaml = false;     // Windows 11 XAML taskbar (Left placement is only offered there)
+    bool hover = false;
+    bool compact = false;  // tighter layout used when the full one does not fit
+    bool fits = true;      // false: no room on this taskbar, the strip is hidden
+    RECT lastAnchor{}, lastBar{};
+    int lastW = -1, lastDpi = 0;
+    SIZE size{};
+    int fullW = 0, tightW = 0;  // widths of the two layouts, updated on every paint
+    // Secondary taskbars: free span between the last task button and the clock (screen coords).
+    int spanLeft = 0, spanRight = 0;
+};
+
+std::vector<std::unique_ptr<Bar>> g_bars;
+HWND g_tip, g_notify;
+HINSTANCE g_inst;
 UINT g_clickMsg;
-bool g_light, g_hover;
+bool g_light;
+bool g_others = true;  // also show on secondary-monitor taskbars
+widget::Style g_style = widget::Style::Percent;
+widget::Side g_side = widget::Side::Right;
 std::vector<WidgetItem> g_items;
 std::wstring g_tipText;
-RECT g_lastTray{}, g_lastBar{};
-int g_lastW = -1, g_lastDpi = 0;
-SIZE g_size{};
 
 const wchar_t* kClass = L"WirelessBatteryWidget";
 
-int Dpi() {
-    UINT d = g_taskbar ? GetDpiForWindow(g_taskbar) : 0;
+int Dpi(const Bar& b) {
+    UINT d = b.taskbar ? GetDpiForWindow(b.taskbar) : 0;
     return d ? (int)d : 96;
 }
-int Px(int v) { return MulDiv(v, Dpi(), 96); }
+int Px(const Bar& b, int v) { return MulDiv(v, Dpi(b), 96); }
+
+Bar* FindBar(HWND wnd) {
+    for (auto& b : g_bars)
+        if (b->wnd == wnd) return b.get();
+    return nullptr;
+}
 
 wchar_t Glyph(DeviceKind k, bool bluetooth) {
     switch (k) {
@@ -116,52 +146,111 @@ struct Canvas {
     }
 };
 
-struct Piece { Mask m; Rgb color; int alpha; int gapAfter; };
+// One item on the strip: layers drawn centred on top of each other (text style: a single mask;
+// ring style: track, arc and the device icon).
+struct Layer { Mask m; Rgb color; int alpha; };
+struct Piece { std::vector<Layer> layers; int w = 0; int gapAfter = 0; };
 
-std::vector<Piece> Layout(int& width) {
+Piece One(Mask m, Rgb color, int alpha, int gapAfter) {
+    Piece p;
+    p.w = m.w;
+    p.layers.push_back({ std::move(m), color, alpha });
+    p.gapAfter = gapAfter;
+    return p;
+}
+
+// Coverage masks for a ring of diameter d: the full circle (track) and the arc that starts at
+// 12 o'clock and runs clockwise over `fraction` of it. 3x3 supersampled for smooth edges.
+void RingMasks(int d, double stroke, double fraction, Mask& track, Mask& arc) {
+    const double kTwoPi = 6.283185307179586;
+    track.w = track.h = arc.w = arc.h = d;
+    track.a.assign((size_t)d * d, 0);
+    arc.a.assign((size_t)d * d, 0);
+    double R = d / 2.0, inner = R - stroke;
+    for (int y = 0; y < d; y++)
+        for (int x = 0; x < d; x++) {
+            int t = 0, a = 0;
+            for (int sy = 0; sy < 3; sy++)
+                for (int sx = 0; sx < 3; sx++) {
+                    double px = x + (sx + 0.5) / 3 - R, py = y + (sy + 0.5) / 3 - R;
+                    double r = std::sqrt(px * px + py * py);
+                    if (r > R || r < inner) continue;
+                    t++;
+                    double ang = std::atan2(px, -py);
+                    if (ang < 0) ang += kTwoPi;
+                    if (ang <= fraction * kTwoPi) a++;
+                }
+            track.a[(size_t)y * d + x] = (BYTE)(t * 255 / 9);
+            arc.a[(size_t)y * d + x] = (BYTE)(a * 255 / 9);
+        }
+}
+
+// Compact: smaller gaps (and no "%" sign in the percentage style), for narrow taskbar spans.
+std::vector<Piece> Layout(const Bar& b, bool compact, int& width) {
     Rgb fg = g_light ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 };
     Rgb red = g_light ? Rgb{ 196, 30, 40 } : Rgb{ 255, 90, 90 };
     Rgb charge = g_light ? Rgb{ 0, 120, 212 } : Rgb{ 96, 205, 255 };
-    HFONT icons = MakeFont(Px(16), FW_NORMAL, L"Segoe Fluent Icons", L"Segoe MDL2 Assets");
-    HFONT bolt = MakeFont(Px(11), FW_NORMAL, L"Segoe Fluent Icons", L"Segoe MDL2 Assets");
-    HFONT text = MakeFont(Px(13), FW_NORMAL, L"Segoe UI Variable Text", L"Segoe UI");
+    bool ring = g_style == widget::Style::Ring;
+    HFONT icons = MakeFont(Px(b, ring ? 11 : 16), FW_NORMAL, L"Segoe Fluent Icons", L"Segoe MDL2 Assets");
+    HFONT bolt = MakeFont(Px(b, 11), FW_NORMAL, L"Segoe Fluent Icons", L"Segoe MDL2 Assets");
+    HFONT text = MakeFont(Px(b, 13), FW_NORMAL, L"Segoe UI Variable Text", L"Segoe UI");
 
     std::vector<Piece> out;
-    if (g_items.empty()) out.push_back({ RenderMask(std::wstring(1, kBatteryUnknown), icons), fg, 110, 0 });
+    if (g_items.empty()) out.push_back(One(RenderMask(std::wstring(1, kBatteryUnknown), icons), fg, 110, 0));
     for (size_t i = 0; i < g_items.size(); i++) {
         const auto& it = g_items[i];
         int a = it.dim ? 120 : 255;
+        bool last = i + 1 == g_items.size();
+        if (ring) {
+            // Ring around the device icon: the arc is the charge, red when low, blue while charging.
+            int d = Px(b, 28);  // even, so the ring and the icon share an exact centre
+            d += d & 1;
+            Mask track, arc;
+            RingMasks(d, std::max(2.0, d / 13.0), it.percent >= 0 ? it.percent / 100.0 : 0.0, track, arc);
+            Piece p;
+            p.w = d;
+            p.layers.push_back({ std::move(track), fg, a * (g_light ? 45 : 60) / 255 });
+            p.layers.push_back({ std::move(arc), it.charging ? charge : it.low ? red : fg, a });
+            p.layers.push_back({ RenderMask(std::wstring(1, Glyph(it.kind, it.bluetooth)), icons), fg, a });
+            p.gapAfter = last ? 0 : Px(b, compact ? 5 : 8);
+            out.push_back(std::move(p));
+            continue;
+        }
         Rgb tc = it.low ? red : fg;
-        out.push_back({ RenderMask(std::wstring(1, Glyph(it.kind, it.bluetooth)), icons), fg, a, Px(5) });
-        std::wstring t = !it.text.empty() ? it.text : it.percent >= 0 ? std::to_wstring(it.percent) + L"%" : L"?";
-        out.push_back({ RenderMask(t, text), tc, a, it.charging ? Px(2) : 0 });
-        if (it.charging) out.push_back({ RenderMask(std::wstring(1, kBolt), bolt), charge, a, 0 });
-        out.back().gapAfter = i + 1 < g_items.size() ? Px(14) : 0;
+        out.push_back(One(RenderMask(std::wstring(1, Glyph(it.kind, it.bluetooth)), icons), fg, a, Px(b, compact ? 3 : 5)));
+        std::wstring t = !it.text.empty() ? it.text : it.percent >= 0 ? std::to_wstring(it.percent) + (compact ? L"" : L"%") : L"?";
+        out.push_back(One(RenderMask(t, text), tc, a, it.charging ? Px(b, 2) : 0));
+        if (it.charging) out.push_back(One(RenderMask(std::wstring(1, kBolt), bolt), charge, a, 0));
+        out.back().gapAfter = last ? 0 : Px(b, compact ? 8 : 14);
     }
     DeleteObject(icons);
     DeleteObject(bolt);
     DeleteObject(text);
 
-    width = Px(8) * 2;
-    for (auto& p : out) width += p.m.w + p.gapAfter;
+    width = Px(b, compact ? 4 : 8) * 2;
+    for (auto& p : out) width += p.w + p.gapAfter;
     return out;
 }
 
-void Paint() {
-    if (!g_wnd) return;
+void Paint(Bar& b) {
+    if (!b.wnd) return;
     RECT bar;
-    GetClientRect(g_taskbar, &bar);
+    GetClientRect(b.taskbar, &bar);
     int H = bar.bottom - bar.top;
     int W = 0;
-    auto pieces = Layout(W);
+    auto pieces = Layout(b, b.compact, W);
+    int other = 0;
+    Layout(b, !b.compact, other);  // the placement picks a layout by the room it has
+    b.fullW = b.compact ? other : W;
+    b.tightW = b.compact ? W : other;
     if (W <= 0 || H <= 0) return;
     Canvas cv(W, H);
 
     // Nearly transparent background so the whole strip receives mouse input,
     // plus a rounded hover highlight like the system tray icons have.
     for (auto& p : cv.px) p = 0x01000000;
-    if (g_hover) {
-        int inset = Px(4), r = Px(4);
+    if (b.hover) {
+        int inset = Px(b, 4), r = Px(b, 4);
         Rgb hc = g_light ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 };
         int ha = g_light ? 20 : 26;
         for (int y = inset; y < H - inset; y++)
@@ -172,10 +261,10 @@ void Paint() {
             }
     }
 
-    int x = Px(8);
+    int x = Px(b, b.compact ? 4 : 8);
     for (auto& p : pieces) {
-        cv.Draw(p.m, x, (H - p.m.h) / 2, p.color, p.alpha);
-        x += p.m.w + p.gapAfter;
+        for (auto& l : p.layers) cv.Draw(l.m, x + (p.w - l.m.w) / 2, (H - l.m.h) / 2, l.color, l.alpha);
+        x += p.w + p.gapAfter;
     }
 
     HDC screen = GetDC(nullptr);
@@ -186,33 +275,183 @@ void Paint() {
     HBITMAP bmp = CreateDIBSection(mem, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
     memcpy(bits, cv.px.data(), (size_t)W * H * 4);
     HGDIOBJ ob = SelectObject(mem, bmp);
-    g_size = { W, H };
+    b.size = { W, H };
     SIZE sz{ W, H };
     POINT src{ 0, 0 };
     BLENDFUNCTION bf{ AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
-    UpdateLayeredWindow(g_wnd, screen, nullptr, &sz, mem, &src, 0, &bf, ULW_ALPHA);
+    UpdateLayeredWindow(b.wnd, screen, nullptr, &sz, mem, &src, 0, &bf, ULW_ALPHA);
     SelectObject(mem, ob);
     DeleteObject(bmp);
     DeleteDC(mem);
     ReleaseDC(nullptr, screen);
-    g_lastW = -1;  // force a re-position with the new size
+    b.lastW = -1;  // force a re-position with the new size
+}
+
+void PaintAll() {
+    for (auto& b : g_bars) Paint(*b);
+}
+
+// ---- UI Automation: where the clock and the task buttons are on secondary taskbars --------------
+// Measured on a background thread: the widget is a child window of the taskbar being queried, so a
+// UI Automation call from the UI thread deadlocks (Explorer's provider asks our window about itself
+// while our thread waits for Explorer). The UI thread only reads the cached result.
+
+struct Span {
+    HWND taskbar = nullptr;
+    bool hasClock = false, hasTask = false;  // the clock can be hidden; a taskbar can have no buttons
+    bool hasStart = false, hasWidgets = false;
+    int startLeft = 0;                       // left edge of the Start button
+    int widgetsRight = 0;                    // right edge of the Widgets (weather) button
+    int clockLeft = 0;                       // left edge of the clock (screen x, can be negative)
+    int taskRight = 0;                       // right edge of the last task button
+};
+
+SRWLOCK g_spanLock = SRWLOCK_INIT;
+std::vector<Span> g_spans;
+HANDLE g_measureThread, g_measureStop;
+
+IUIAutomationCondition* StringCondition(IUIAutomation* uia, PROPERTYID prop, const wchar_t* value) {
+    VARIANT v;
+    VariantInit(&v);
+    v.vt = VT_BSTR;
+    v.bstrVal = SysAllocString(value);
+    IUIAutomationCondition* c = nullptr;
+    uia->CreatePropertyCondition(prop, v, &c);
+    VariantClear(&v);
+    return c;
+}
+
+struct Conditions { IUIAutomationCondition *clock = nullptr, *task = nullptr, *start = nullptr, *widgets = nullptr; };
+
+// Bounds of the first element matching `cond` below `root`.
+bool FindRect(IUIAutomationElement* root, IUIAutomationCondition* cond, RECT& r) {
+    IUIAutomationElement* el = nullptr;
+    if (!cond || FAILED(root->FindFirst(TreeScope_Descendants, cond, &el)) || !el) return false;
+    bool ok = SUCCEEDED(el->get_CurrentBoundingRectangle(&r)) && r.right > r.left;
+    el->Release();
+    return ok;
+}
+
+// `clock` is only used on secondary taskbars (on the primary one the same id also matches tray buttons).
+Span Measure(IUIAutomation* uia, const Conditions& cn, IUIAutomationCondition* clock, HWND taskbar) {
+    IUIAutomationCondition* task = cn.task;
+    Span sp;
+    sp.taskbar = taskbar;
+    RECT bar;
+    GetWindowRect(taskbar, &bar);
+    IUIAutomationElement* root = nullptr;
+    if (FAILED(uia->ElementFromHandle(taskbar, &root)) || !root) return sp;
+    IUIAutomationElement* el = nullptr;
+    RECT r;
+    if (FindRect(root, clock, r) && r.left > bar.left) {
+        sp.clockLeft = r.left;
+        sp.hasClock = true;
+    }
+    if (FindRect(root, cn.start, r)) {
+        sp.startLeft = r.left;
+        sp.hasStart = true;
+    }
+    if (FindRect(root, cn.widgets, r)) {
+        sp.widgetsRight = r.right;
+        sp.hasWidgets = true;
+    }
+    IUIAutomationElementArray* all = nullptr;
+    if (task && SUCCEEDED(root->FindAll(TreeScope_Descendants, task, &all)) && all) {
+        int n = 0;
+        all->get_Length(&n);
+        for (int i = 0; i < n; i++) {
+            if (FAILED(all->GetElement(i, &el)) || !el) continue;
+            if (SUCCEEDED(el->get_CurrentBoundingRectangle(&r)) && r.right > r.left && (!sp.hasClock || r.right <= sp.clockLeft)) {
+                sp.taskRight = sp.hasTask ? std::max(sp.taskRight, (int)r.right) : (int)r.right;
+                sp.hasTask = true;
+            }
+            el->Release();
+        }
+        all->Release();
+    }
+    root->Release();
+    return sp;
+}
+
+DWORD WINAPI MeasureThread(LPVOID) {
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    // CLSID_CUIAutomation / IID_IUIAutomation, spelled out so no extra import library is needed.
+    static const GUID clsid = { 0xff48dba4, 0x60ef, 0x4201, { 0xaa, 0x87, 0x54, 0x10, 0x3e, 0xef, 0x59, 0x4e } };
+    static const GUID iid = { 0x30cbe57d, 0xd9d0, 0x452a, { 0xab, 0x13, 0x7a, 0xc5, 0xac, 0x48, 0x25, 0xee } };
+    IUIAutomation* uia = nullptr;
+    if (SUCCEEDED(CoCreateInstance(clsid, nullptr, CLSCTX_INPROC_SERVER, iid, (void**)&uia)) && uia) {
+        Conditions cn;
+        cn.clock = StringCondition(uia, UIA_AutomationIdPropertyId, L"SystemTrayIcon");
+        cn.task = StringCondition(uia, UIA_ClassNamePropertyId, L"Taskbar.TaskListButtonAutomationPeer");
+        cn.start = StringCondition(uia, UIA_AutomationIdPropertyId, L"StartButton");
+        cn.widgets = StringCondition(uia, UIA_AutomationIdPropertyId, L"WidgetsButton");
+        do {
+            std::vector<Span> spans;
+            if (HWND t = FindWindowW(L"Shell_TrayWnd", nullptr)) spans.push_back(Measure(uia, cn, nullptr, t));
+            for (HWND t = FindWindowExW(nullptr, nullptr, L"Shell_SecondaryTrayWnd", nullptr); t;
+                 t = FindWindowExW(nullptr, t, L"Shell_SecondaryTrayWnd", nullptr))
+                spans.push_back(Measure(uia, cn, cn.clock, t));
+            AcquireSRWLockExclusive(&g_spanLock);
+            g_spans.swap(spans);
+            ReleaseSRWLockExclusive(&g_spanLock);
+        } while (WaitForSingleObject(g_measureStop, 2000) == WAIT_TIMEOUT);
+        for (IUIAutomationCondition* x : { cn.clock, cn.task, cn.start, cn.widgets })
+            if (x) x->Release();
+        uia->Release();
+    }
+    CoUninitialize();
+    return 0;
+}
+
+void StartMeasuring() {
+    if (g_measureThread) return;
+    g_measureStop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    g_measureThread = CreateThread(nullptr, 0, MeasureThread, nullptr, 0, nullptr);
+}
+
+void StopMeasuring() {
+    if (!g_measureThread) return;
+    SetEvent(g_measureStop);
+    WaitForSingleObject(g_measureThread, 3000);
+    CloseHandle(g_measureThread);
+    CloseHandle(g_measureStop);
+    g_measureThread = g_measureStop = nullptr;
+    AcquireSRWLockExclusive(&g_spanLock);
+    g_spans.clear();
+    ReleaseSRWLockExclusive(&g_spanLock);
+}
+
+// The measuring thread is only needed for secondary taskbars and for the Left placement.
+bool NeedMeasuring() { return g_others || g_side == widget::Side::Left; }
+
+// Latest measurement for a taskbar; false until the first one has come in.
+bool GetSpan(HWND taskbar, Span& out) {
+    bool found = false;
+    AcquireSRWLockShared(&g_spanLock);
+    for (const auto& sp : g_spans)
+        if (sp.taskbar == taskbar) { out = sp; found = true; }
+    ReleaseSRWLockShared(&g_spanLock);
+    return found;
 }
 
 LRESULT CALLBACK WidgetProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    Bar* b = FindBar(h);
     switch (msg) {
         case WM_MOUSEMOVE:
-            if (!g_hover) {
-                g_hover = true;
+            if (b && !b->hover) {
+                b->hover = true;
                 TRACKMOUSEEVENT t{ sizeof(t), TME_LEAVE, h, 0 };
                 TrackMouseEvent(&t);
-                Paint();
+                Paint(*b);
                 widget::Reposition();
             }
             return 0;
         case WM_MOUSELEAVE:
-            g_hover = false;
-            Paint();
-            widget::Reposition();
+            if (b) {
+                b->hover = false;
+                Paint(*b);
+                widget::Reposition();
+            }
             return 0;
         case WM_LBUTTONUP:
         case WM_RBUTTONUP:
@@ -224,22 +463,176 @@ LRESULT CALLBACK WidgetProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(h, msg, wp, lp);
 }
 
+bool Horizontal(HWND taskbar) {
+    RECT tb;
+    GetWindowRect(taskbar, &tb);
+    return tb.right - tb.left >= tb.bottom - tb.top;
+}
+
+void AddTool(HWND wnd) {
+    if (!g_tip) return;
+    TTTOOLINFOW ti{ sizeof(ti) };
+    ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+    ti.hwnd = g_notify;
+    ti.uId = (UINT_PTR)wnd;
+    ti.lpszText = const_cast<wchar_t*>(g_tipText.empty() ? L"Wireless Battery" : g_tipText.c_str());
+    SendMessageW(g_tip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+}
+
+void RemoveTool(HWND wnd) {
+    if (!g_tip) return;
+    TTTOOLINFOW ti{ sizeof(ti) };
+    ti.hwnd = g_notify;
+    ti.uId = (UINT_PTR)wnd;
+    SendMessageW(g_tip, TTM_DELTOOLW, 0, (LPARAM)&ti);
+}
+
+Bar* AddBar(HWND taskbar, bool primary) {
+    auto b = std::make_unique<Bar>();
+    b->taskbar = taskbar;
+    b->primary = primary;
+    b->xaml = FindWindowExW(taskbar, nullptr, L"Windows.UI.Composition.DesktopWindowContentBridge", nullptr) != nullptr;
+    // Windows 11's taskbar is a XAML island; on Windows 10 the task buttons live in ReBarWindow32
+    // and have to be narrowed so they never slide under the widget.
+    if (primary)
+        b->rebar = FindWindowExW(taskbar, nullptr, L"Windows.UI.Composition.DesktopWindowContentBridge", nullptr)
+                       ? nullptr
+                       : FindWindowExW(taskbar, nullptr, L"ReBarWindow32", nullptr);
+    b->wnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_NOACTIVATE, kClass, L"", WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 1, 1, taskbar,
+                             nullptr, g_inst, nullptr);
+    if (!b->wnd) return nullptr;
+    AddTool(b->wnd);
+    b->lastDpi = Dpi(*b);
+    g_bars.push_back(std::move(b));
+    Bar* p = g_bars.back().get();
+    Paint(*p);
+    return p;
+}
+
+void RemoveBar(size_t i) {
+    Bar& b = *g_bars[i];
+    if (b.rebar && IsWindow(b.rebar) && IsWindow(b.taskbar)) {
+        // Let Explorer lay the task buttons out again over the full width.
+        RECT r;
+        GetClientRect(b.taskbar, &r);
+        PostMessageW(b.taskbar, WM_SIZE, SIZE_RESTORED, MAKELPARAM(r.right, r.bottom));
+    }
+    if (b.wnd) {
+        RemoveTool(b.wnd);
+        DestroyWindow(b.wnd);
+    }
+    g_bars.erase(g_bars.begin() + i);
+}
+
+// Adds strips for new secondary taskbars and drops those whose taskbar is gone (all of them when
+// showing on other taskbars is turned off).
+void SyncSecondaries() {
+    if (!g_others) {
+        for (size_t i = g_bars.size(); i-- > 0;)
+            if (!g_bars[i]->primary) RemoveBar(i);
+        return;
+    }
+    for (size_t i = g_bars.size(); i-- > 0;)
+        if (!g_bars[i]->primary && (!IsWindow(g_bars[i]->taskbar) || !Horizontal(g_bars[i]->taskbar))) RemoveBar(i);
+    for (HWND t = FindWindowExW(nullptr, nullptr, L"Shell_SecondaryTrayWnd", nullptr); t;
+         t = FindWindowExW(nullptr, t, L"Shell_SecondaryTrayWnd", nullptr)) {
+        if (!Horizontal(t)) continue;
+        bool known = false;
+        for (auto& b : g_bars) known |= b->taskbar == t;
+        if (!known && AddBar(t, false)) {
+            Bar& b = *g_bars.back();
+            ShowWindow(b.wnd, SW_SHOWNOACTIVATE);
+        }
+    }
+}
+
+// Picks the full or compact layout for `room` pixels; false when even the compact one does not fit.
+bool Fit(Bar& b, int room) {
+    bool compact = b.fullW > room;
+    if (compact != b.compact) { b.compact = compact; Paint(b); }
+    return (compact ? b.tightW : b.fullW) <= room;
+}
+
+void Hide(Bar& b) {
+    if (IsWindowVisible(b.wnd)) ShowWindow(b.wnd, SW_HIDE);
+}
+
+// Places one strip. Returns false when its taskbar is gone.
+bool PlaceBar(Bar& b) {
+    if (!b.wnd || !IsWindow(b.wnd) || !IsWindow(b.taskbar)) return false;
+    if (Dpi(b) != b.lastDpi) { b.lastDpi = Dpi(b); Paint(b); }
+    RECT bar, anchor{};
+    GetWindowRect(b.taskbar, &bar);
+    Span sp;
+    bool measured = GetSpan(b.taskbar, sp);
+    int startX = INT_MIN;  // screen x the strip starts at
+
+    // Left: from the taskbar's left edge (or the Widgets button) up to the Start button. Only on the
+    // Windows 11 taskbar with centred icons; when there is no room it falls back to the right side.
+    bool onLeft = false;
+    if (g_side == widget::Side::Left && b.xaml && measured && sp.hasStart) {
+        int from = sp.hasWidgets ? sp.widgetsRight + Px(b, 4) : (int)bar.left + Px(b, 4);
+        int to = sp.startLeft - Px(b, 4);
+        if (to > from && Fit(b, to - from)) {
+            onLeft = true;
+            startX = from;
+            anchor = { from, bar.top, to, bar.bottom };
+        }
+    }
+    if (!onLeft) {
+        int rightEdge;  // screen x the strip ends at
+        if (b.primary) {
+            HWND tray = FindWindowExW(b.taskbar, nullptr, L"TrayNotifyWnd", nullptr);
+            if (!tray) return true;
+            GetWindowRect(tray, &anchor);
+            if (b.compact) { b.compact = false; Paint(b); }  // the primary tray side always has room
+            rightEdge = anchor.left - Px(b, 2);
+        } else {
+            if (!measured) { Hide(b); return true; }  // not measured yet
+            b.spanLeft = sp.hasTask ? std::max((int)bar.left, sp.taskRight) : (int)bar.left;
+            b.spanRight = sp.hasClock ? sp.clockLeft : bar.right - Px(b, 8);
+            if (!Fit(b, b.spanRight - b.spanLeft - Px(b, 4))) { Hide(b); return true; }
+            anchor = { b.spanLeft, bar.top, b.spanRight, bar.bottom };
+            rightEdge = b.spanRight - Px(b, 2);
+        }
+        startX = rightEdge - b.size.cx;
+    }
+    POINT p{ startX, bar.top };
+    ScreenToClient(b.taskbar, &p);
+    int left = p.x;
+
+    // Windows 10: Explorer re-expands the task buttons on its own layout passes; narrow them again.
+    if (!onLeft && b.rebar && IsWindow(b.rebar)) {
+        RECT rr;
+        GetWindowRect(b.rebar, &rr);
+        POINT tl{ rr.left, rr.top };
+        ScreenToClient(b.taskbar, &tl);
+        if (tl.x + (rr.right - rr.left) > left && left > tl.x)
+            MoveWindow(b.rebar, tl.x, tl.y, left - tl.x, rr.bottom - rr.top, TRUE);
+    }
+
+    // Keep us above the taskbar's own content (our sibling windows).
+    bool covered = GetWindow(b.wnd, GW_HWNDPREV) != nullptr;
+    if (!covered && IsWindowVisible(b.wnd) && EqualRect(&anchor, &b.lastAnchor) && EqualRect(&bar, &b.lastBar) &&
+        b.lastW == b.size.cx)
+        return true;
+    b.lastAnchor = anchor;
+    b.lastBar = bar;
+    b.lastW = b.size.cx;
+    SetWindowPos(b.wnd, HWND_TOP, left, 0, b.size.cx, b.size.cy, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    return true;
+}
+
 }  // namespace
 
 namespace widget {
 
 bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme) {
     Destroy();
-    g_taskbar = FindWindowW(L"Shell_TrayWnd", nullptr);
-    if (!g_taskbar || !FindWindowExW(g_taskbar, nullptr, L"TrayNotifyWnd", nullptr)) { g_taskbar = nullptr; return false; }
-    RECT tb;
-    GetWindowRect(g_taskbar, &tb);
-    if (tb.bottom - tb.top > tb.right - tb.left) { g_taskbar = nullptr; return false; }  // vertical taskbar: use tray icons
-    // Windows 11's taskbar is a XAML island; on Windows 10 the task buttons live in ReBarWindow32
-    // and have to be narrowed so they never slide under the widget.
-    g_rebar = FindWindowExW(g_taskbar, nullptr, L"Windows.UI.Composition.DesktopWindowContentBridge", nullptr)
-                  ? nullptr
-                  : FindWindowExW(g_taskbar, nullptr, L"ReBarWindow32", nullptr);
+    HWND taskbar = FindWindowW(L"Shell_TrayWnd", nullptr);
+    if (!taskbar || !FindWindowExW(taskbar, nullptr, L"TrayNotifyWnd", nullptr)) return false;
+    if (!Horizontal(taskbar)) return false;  // vertical taskbar: use tray icons
+    g_inst = inst;
     g_notify = notifyWnd;
     g_clickMsg = clickMsg;
     g_light = lightTheme;
@@ -253,95 +646,92 @@ bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme) {
         wc.lpszClassName = kClass;
         registered = RegisterClassExW(&wc) != 0;
     }
-    g_wnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_NOACTIVATE, kClass, L"", WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 1, 1,
-                            g_taskbar, nullptr, inst, nullptr);
-    if (!g_wnd) { g_taskbar = nullptr; return false; }
 
     INITCOMMONCONTROLSEX icc{ sizeof(icc), ICC_WIN95_CLASSES };
     InitCommonControlsEx(&icc);
     g_tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, 0, 0, 0, 0,
                             notifyWnd, nullptr, inst, nullptr);
-    if (g_tip) {
-        TTTOOLINFOW ti{ sizeof(ti) };
-        ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
-        ti.hwnd = notifyWnd;
-        ti.uId = (UINT_PTR)g_wnd;
-        ti.lpszText = const_cast<wchar_t*>(L"Wireless Battery");
-        SendMessageW(g_tip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
-        SendMessageW(g_tip, TTM_SETMAXTIPWIDTH, 0, 600);
+    if (g_tip) SendMessageW(g_tip, TTM_SETMAXTIPWIDTH, 0, 600);
+
+    if (NeedMeasuring()) StartMeasuring();
+    Bar* primary = AddBar(taskbar, true);
+    if (!primary) {
+        Destroy();
+        return false;
     }
-    g_lastDpi = Dpi();
-    Paint();
-    g_lastW = -1;
-    Reposition();
-    ShowWindow(g_wnd, SW_SHOWNOACTIVATE);
+    PlaceBar(*primary);
+    ShowWindow(primary->wnd, SW_SHOWNOACTIVATE);
+    SyncSecondaries();
+    for (auto& b : g_bars)
+        if (!b->primary) PlaceBar(*b);
     return true;
 }
 
 void Destroy() {
-    if (g_rebar && IsWindow(g_rebar) && g_taskbar && IsWindow(g_taskbar)) {
-        // Let Explorer lay the task buttons out again over the full width.
-        RECT r;
-        GetClientRect(g_taskbar, &r);
-        PostMessageW(g_taskbar, WM_SIZE, SIZE_RESTORED, MAKELPARAM(r.right, r.bottom));
-    }
-    g_rebar = nullptr;
+    StopMeasuring();
+    while (!g_bars.empty()) RemoveBar(g_bars.size() - 1);
     if (g_tip) { DestroyWindow(g_tip); g_tip = nullptr; }
-    if (g_wnd) { DestroyWindow(g_wnd); g_wnd = nullptr; }
-    g_taskbar = nullptr;
-    g_hover = false;
 }
 
-bool Alive() { return g_wnd && IsWindow(g_wnd) && g_taskbar && IsWindow(g_taskbar); }
+bool Alive() {
+    for (auto& b : g_bars)
+        if (b->primary) return b->wnd && IsWindow(b->wnd) && IsWindow(b->taskbar);
+    return false;
+}
 
 void SetItems(const std::vector<WidgetItem>& items, const std::wstring& tooltip) {
     g_items = items;
     if (tooltip != g_tipText && g_tip) {
         g_tipText = tooltip;
-        TTTOOLINFOW ti{ sizeof(ti) };
-        ti.hwnd = g_notify;
-        ti.uId = (UINT_PTR)g_wnd;
-        ti.lpszText = const_cast<wchar_t*>(g_tipText.c_str());
-        SendMessageW(g_tip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
+        for (auto& b : g_bars) {
+            TTTOOLINFOW ti{ sizeof(ti) };
+            ti.hwnd = g_notify;
+            ti.uId = (UINT_PTR)b->wnd;
+            ti.lpszText = const_cast<wchar_t*>(g_tipText.c_str());
+            SendMessageW(g_tip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
+        }
     }
-    Paint();
+    PaintAll();
     Reposition();
+}
+
+void SetOtherTaskbars(bool on) {
+    g_others = on;
+    if (!NeedMeasuring()) StopMeasuring();
+    else if (!g_bars.empty()) StartMeasuring();
+    Reposition();
+}
+
+void SetStyle(Style style) {
+    g_style = style;
+    PaintAll();
+    Reposition();
+}
+
+void SetSide(Side side) {
+    g_side = side;
+    if (!NeedMeasuring()) StopMeasuring();
+    else if (!g_bars.empty()) StartMeasuring();
+    for (auto& b : g_bars) b->lastW = -1;  // re-place every strip
+    Reposition();
+}
+
+bool HasOtherTaskbars() {
+    for (HWND t = FindWindowExW(nullptr, nullptr, L"Shell_SecondaryTrayWnd", nullptr); t;
+         t = FindWindowExW(nullptr, t, L"Shell_SecondaryTrayWnd", nullptr))
+        if (Horizontal(t)) return true;
+    return false;
 }
 
 void SetLightTheme(bool light) {
     g_light = light;
-    Paint();
+    PaintAll();
 }
 
 bool Reposition() {
     if (!Alive()) return false;
-    if (Dpi() != g_lastDpi) { g_lastDpi = Dpi(); Paint(); }
-    HWND tray = FindWindowExW(g_taskbar, nullptr, L"TrayNotifyWnd", nullptr);
-    if (!tray) return true;
-    RECT tr, bar;
-    GetWindowRect(tray, &tr);
-    GetWindowRect(g_taskbar, &bar);
-    POINT p{ tr.left, bar.top };
-    ScreenToClient(g_taskbar, &p);
-    int left = p.x - g_size.cx - Px(2);
-
-    // Windows 10: Explorer re-expands the task buttons on its own layout passes; narrow them again.
-    if (g_rebar && IsWindow(g_rebar)) {
-        RECT rr;
-        GetWindowRect(g_rebar, &rr);
-        POINT tl{ rr.left, rr.top };
-        ScreenToClient(g_taskbar, &tl);
-        if (tl.x + (rr.right - rr.left) > left && left > tl.x)
-            MoveWindow(g_rebar, tl.x, tl.y, left - tl.x, rr.bottom - rr.top, TRUE);
-    }
-
-    // Keep us above the taskbar's own content (our sibling windows).
-    bool covered = GetWindow(g_wnd, GW_HWNDPREV) != nullptr;
-    if (!covered && EqualRect(&tr, &g_lastTray) && EqualRect(&bar, &g_lastBar) && g_lastW == g_size.cx) return true;
-    g_lastTray = tr;
-    g_lastBar = bar;
-    g_lastW = g_size.cx;
-    SetWindowPos(g_wnd, HWND_TOP, left, 0, g_size.cx, g_size.cy, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    SyncSecondaries();
+    for (auto& b : g_bars) PlaceBar(*b);
     return true;
 }
 

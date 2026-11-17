@@ -1,6 +1,7 @@
 #pragma once
 // A small transparent strip on the taskbar, just left of the notification area, showing
-// "[icon] 30%  [icon] 93%". Implemented as a layered child window of the taskbar (Shell_TrayWnd).
+// "[icon] 30%  [icon] 93%". Implemented as a layered child window of the taskbar (Shell_TrayWnd), plus one
+// on each secondary-monitor taskbar (Shell_SecondaryTrayWnd), placed left of that taskbar's clock.
 #include <windows.h>
 #include <string>
 #include <vector>
@@ -17,12 +18,21 @@ struct WidgetItem {
 };
 
 namespace widget {
-// Creates the widget on the primary taskbar. Clicks are reported by posting `clickMsg` to `notifyWnd`.
+enum class Style { Percent, Ring };  // "[icon] 93%" or a progress ring around the icon
+enum class Side { Right, Left };     // next to the tray, or at the left end (Windows 11, centred icons)
+// Creates the widget on the primary taskbar (and every horizontal secondary taskbar). Clicks are reported by posting `clickMsg` to `notifyWnd`.
 bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme);
 void Destroy();
 bool Alive();
 void SetItems(const std::vector<WidgetItem>& items, const std::wstring& tooltip);
 void SetLightTheme(bool light);
+// Whether to also show the widget on secondary-monitor taskbars (default on).
+void SetOtherTaskbars(bool on);
+// True when a horizontal secondary-monitor taskbar exists.
+bool HasOtherTaskbars();
+void SetStyle(Style style);
+// Left falls back to Right on taskbars without room there (left-aligned icons, Windows 10).
+void SetSide(Side side);
 // Re-checks the taskbar layout and moves the widget if needed; call about once a second.
 // Returns false when the taskbar it was attached to is gone.
 bool Reposition();
