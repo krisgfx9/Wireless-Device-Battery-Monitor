@@ -30,7 +30,7 @@ constexpr UINT PLACEHOLDER_ID = 1;
 
 enum MenuId : UINT {
     ID_REFRESH = 100, ID_AUTOSTART, ID_HIDE_LAST_KNOWN, ID_WIDGET_BACKGROUND, ID_EXIT, ID_MODE_WIDGET, ID_MODE_TRAY, ID_SUPPORT,
-    ID_LANG_AUTO, ID_LANG_EN, ID_LANG_TR,
+    ID_LANG_EN, ID_LANG_TR,
     ID_DEVICE_FIRST = 1000
 };
 enum DeviceCmd : UINT { DEV_TOGGLE, DEV_LEFT, DEV_RIGHT, DEV_STRIDE = 4 };
@@ -162,15 +162,8 @@ bool LoadHideLastKnown() { return LoadBoolSetting(L"HideLastKnownDevices", false
 void SaveHideLastKnown(bool on) { SaveBoolSetting(L"HideLastKnownDevices", on); }
 bool LoadWidgetBackground() { return LoadBoolSetting(L"WidgetBackground", false); }
 void SaveWidgetBackground(bool on) { SaveBoolSetting(L"WidgetBackground", on); }
-UiLanguage LoadLanguage() {
-    DWORD v = 0, sz = sizeof(v);
-    RegGetValueW(HKEY_CURRENT_USER, kSettingsKey, L"Language", RRF_RT_REG_DWORD, nullptr, &v, &sz);
-    return v <= (DWORD)UiLanguage::Turkish ? (UiLanguage)v : UiLanguage::Automatic;
-}
-void SaveLanguage(UiLanguage lang) {
-    DWORD v = (DWORD)lang;
-    RegSetKeyValueW(HKEY_CURRENT_USER, kSettingsKey, L"Language", REG_DWORD, &v, sizeof(v));
-}
+bool LoadTurkishUi() { return LoadBoolSetting(L"TurkishUi", WindowsIsTurkish()); }
+void SaveTurkishUi(bool on) { SaveBoolSetting(L"TurkishUi", on); }
 
 bool AutostartEnabled() {
     wchar_t buf[MAX_PATH * 2];
@@ -541,9 +534,9 @@ void RedrawAll() {
     UpdatePlaceholder();
 }
 
-void SetLanguage(UiLanguage lang) {
-    SetUiLanguage(lang);
-    SaveLanguage(lang);
+void SetTurkishUi(bool on) {
+    SetUiTurkish(on);
+    SaveTurkishUi(on);
     RedrawAll();  // tooltips and the placeholder text
     UpdateWidget();
 }
@@ -608,10 +601,9 @@ void ShowMenu() {
     AppendMenuW(m, MF_STRING, ID_REFRESH, T(L"Refresh now"));
     AppendMenuW(m, MF_STRING | (AutostartEnabled() ? MF_CHECKED : 0), ID_AUTOSTART, T(L"Start with Windows"));
     HMENU lang = CreatePopupMenu();  // language names stay in their own language
-    AppendMenuW(lang, MF_STRING, ID_LANG_AUTO, T(L"Automatic (Windows language)"));
     AppendMenuW(lang, MF_STRING, ID_LANG_EN, L"English");
-    AppendMenuW(lang, MF_STRING, ID_LANG_TR, L"Türkçe");
-    CheckMenuRadioItem(lang, ID_LANG_AUTO, ID_LANG_TR, ID_LANG_AUTO + (UINT)GetUiLanguage(), MF_BYCOMMAND);
+    AppendMenuW(lang, MF_STRING, ID_LANG_TR, L"T\u00fcrk\u00e7e");
+    CheckMenuRadioItem(lang, ID_LANG_EN, ID_LANG_TR, UiTurkish() ? ID_LANG_TR : ID_LANG_EN, MF_BYCOMMAND);
     AppendMenuW(m, MF_POPUP, (UINT_PTR)lang, T(L"Language"));
     AppendMenuW(m, MF_STRING, ID_SUPPORT, T(L"Support the project..."));
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
@@ -629,7 +621,8 @@ void ShowMenu() {
         case ID_WIDGET_BACKGROUND: SetWidgetBackground(!g_widgetBackground); break;
         case ID_MODE_WIDGET: SetMode(true); break;
         case ID_MODE_TRAY: SetMode(false); break;
-        case ID_LANG_AUTO: case ID_LANG_EN: case ID_LANG_TR: SetLanguage((UiLanguage)(cmd - ID_LANG_AUTO)); break;
+        case ID_LANG_EN: SetTurkishUi(false); break;
+        case ID_LANG_TR: SetTurkishUi(true); break;
         case ID_SUPPORT: ShellExecuteW(nullptr, L"open", L"https://github.com/sponsors/krisgfx9", nullptr, nullptr, SW_SHOWNORMAL); break;
         case ID_EXIT: DestroyWindow(g_hwnd); break;
         default:
@@ -790,7 +783,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     g_stopEvt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_wantWidget = LoadWidgetMode();
     g_hideLastKnown = LoadHideLastKnown();
-    SetUiLanguage(LoadLanguage());
+    SetUiTurkish(LoadTurkishUi());
     g_widgetBackground = LoadWidgetBackground();
     widget::SetBackground(g_widgetBackground);  // remembered by the widget across re-creation
     LoadHidden();

@@ -3,11 +3,11 @@
 // chosen language, or the English text when there is none. The --list / --dump output stays English.
 #include <string>
 
-// Automatic follows the Windows display language; the others are picked in the tray menu.
-enum class UiLanguage { Automatic = 0, English = 1, Turkish = 2 };
+// True when the Windows display language is Turkish: the default until the user picks a language.
+bool WindowsIsTurkish();
 
-void SetUiLanguage(UiLanguage lang);
-UiLanguage GetUiLanguage();
+void SetUiTurkish(bool on);
+bool UiTurkish();
 
 const wchar_t* T(const wchar_t* en);
 inline std::wstring T(const std::wstring& en) { return T(en.c_str()); }
