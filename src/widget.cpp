@@ -133,10 +133,11 @@ constexpr wchar_t kBolt = 0xE945;            // LightningBolt
 constexpr wchar_t kBatteryUnknown = 0xE996;  // shown when there is nothing to display
 
 // Creates a font, falling back when the preferred face is not installed (GDI would silently substitute).
-HFONT MakeFont(int px, int weight, const wchar_t* face, const wchar_t* fallback) {
+HFONT MakeFont(int px, int weight, const wchar_t* face, const wchar_t* fallback, int fallbackPx = 0) {
     for (const wchar_t* f : { face, fallback }) {
-        HFONT h = CreateFontW(-px, 0, 0, 0, weight, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                              ANTIALIASED_QUALITY, DEFAULT_PITCH, f);
+        int h_px = (f == fallback && fallbackPx > 0) ? fallbackPx : px;
+        HFONT h = CreateFontW(-h_px, 0, 0, 0, weight, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                              CLEARTYPE_QUALITY, DEFAULT_PITCH, f);
         HDC dc = CreateCompatibleDC(nullptr);
         HGDIOBJ o = SelectObject(dc, h);
         wchar_t got[LF_FACESIZE] = {};
@@ -155,7 +156,7 @@ struct Mask {
     std::vector<BYTE> a;
 };
 
-Mask RenderMask(const std::wstring& s, HFONT font) {
+Mask RenderMask(const std::wstring& s, HFONT font, bool darkOnLight) {
     Mask m;
     HDC dc = CreateCompatibleDC(nullptr);
     HGDIOBJ of = SelectObject(dc, font);
@@ -167,22 +168,26 @@ Mask RenderMask(const std::wstring& s, HFONT font) {
     void* bits = nullptr;
     HBITMAP bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
     HGDIOBJ ob = SelectObject(dc, bmp);
-    memset(bits, 0, (size_t)W * H * 4);
+    memset(bits, darkOnLight ? 0xFF : 0x00, (size_t)W * H * 4);
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, RGB(255, 255, 255));
+    SetTextColor(dc, darkOnLight ? RGB(0, 0, 0) : RGB(255, 255, 255));
     TextOutW(dc, 4, 4, s.c_str(), (int)s.size());
     GdiFlush();
     auto* p = static_cast<DWORD*>(bits);
+    auto cover = [&](DWORD v) -> BYTE {
+        int c = (int)((v & 0xFF) + ((v >> 8) & 0xFF) + ((v >> 16) & 0xFF)) / 3;
+        return (BYTE)(darkOnLight ? 255 - c : c);
+    };
     int x0 = W, y0 = H, x1 = -1, y1 = -1;
     for (int y = 0; y < H; y++)
         for (int x = 0; x < W; x++)
-            if (p[y * W + x] & 0xFF) { x0 = std::min(x0, x); x1 = std::max(x1, x); y0 = std::min(y0, y); y1 = std::max(y1, y); }
+            if (cover(p[y * W + x])) { x0 = std::min(x0, x); x1 = std::max(x1, x); y0 = std::min(y0, y); y1 = std::max(y1, y); }
     if (x1 >= 0) {
         m.w = x1 - x0 + 1;
         m.h = y1 - y0 + 1;
         m.a.resize((size_t)m.w * m.h);
         for (int y = 0; y < m.h; y++)
-            for (int x = 0; x < m.w; x++) m.a[y * m.w + x] = (BYTE)(p[(y0 + y) * W + x0 + x] & 0xFF);
+            for (int x = 0; x < m.w; x++) m.a[y * m.w + x] = cover(p[(y0 + y) * W + x0 + x]);
     }
     SelectObject(dc, ob);
     SelectObject(dc, of);
@@ -222,18 +227,18 @@ std::vector<Piece> Layout(int& width) {
     Rgb charge = g_light ? Rgb{ 0, 120, 212 } : Rgb{ 96, 205, 255 };
     HFONT icons = MakeFont(Px(16), FW_NORMAL, L"Segoe Fluent Icons", L"Segoe MDL2 Assets");
     HFONT bolt = MakeFont(Px(11), FW_NORMAL, L"Segoe Fluent Icons", L"Segoe MDL2 Assets");
-    HFONT text = MakeFont(Px(13), FW_NORMAL, L"Segoe UI Variable Text", L"Segoe UI");
+    HFONT text = MakeFont(Px(13), FW_NORMAL, L"Segoe UI Variable Text", L"Segoe UI", Px(12));
 
     std::vector<Piece> out;
-    if (g_items.empty()) out.push_back({ RenderMask(std::wstring(1, kBatteryUnknown), icons), fg, 110, 0 });
+    if (g_items.empty()) out.push_back({ RenderMask(std::wstring(1, kBatteryUnknown), icons, g_light), fg, 110, 0 });
     for (size_t i = 0; i < g_items.size(); i++) {
         const auto& it = g_items[i];
         int a = it.dim ? 120 : 255;
         Rgb tc = it.low ? red : fg;
-        out.push_back({ RenderMask(std::wstring(1, Glyph(it.kind, it.bluetooth)), icons), fg, a, Px(5) });
+        out.push_back({ RenderMask(std::wstring(1, Glyph(it.kind, it.bluetooth)), icons, g_light), fg, a, Px(5) });
         std::wstring t = !it.text.empty() ? it.text : it.percent >= 0 ? std::to_wstring(it.percent) + L"%" : L"?";
-        out.push_back({ RenderMask(t, text), tc, a, it.charging ? Px(2) : 0 });
-        if (it.charging) out.push_back({ RenderMask(std::wstring(1, kBolt), bolt), charge, a, 0 });
+        out.push_back({ RenderMask(t, text, g_light), tc, a, it.charging ? Px(2) : 0 });
+        if (it.charging) out.push_back({ RenderMask(std::wstring(1, kBolt), bolt, g_light), charge, a, 0 });
         out.back().gapAfter = i + 1 < g_items.size() ? Px(14) : 0;
     }
     DeleteObject(icons);
@@ -433,13 +438,19 @@ bool Reposition() {
     // edge, so a window's client-space left edge is its screen-space right edge.
     bool rtl = GetWindowLongW(g_taskbar, GWL_EXSTYLE) & WS_EX_LAYOUTRTL;
     int edge = rtl ? tr.right : tr.left;  // screen x we sit next to
-    // Windows 10: News and Interests / Weather sits in ShellFeedsTaskbarViewWindow immediately left of the tray.
-    HWND feeds = FindWindowExW(g_taskbar, nullptr, L"ShellFeedsTaskbarViewWindow", nullptr);
-    if (!rtl && feeds && IsWindowVisible(feeds)) {
-        RECT fr;
-        GetWindowRect(feeds, &fr);
-        if (fr.left < edge && fr.right > fr.left) edge = fr.left;
-    }
+    // Windows 10: News and Interests / Weather sits immediately left of the tray. The window that hosts it
+    // depends on the build: ShellFeedsTaskbarViewWindow on some, DynamicContent2 on others (e.g. 19045,
+    // where the search highlights button is DynamicContent1). Both are direct children of the taskbar and
+    // only a visible one counts. Its rectangle is read on every pass because the weather text changes its
+    // width, so the widget follows it.
+    if (!rtl)
+        for (const wchar_t* cls : { L"ShellFeedsTaskbarViewWindow", L"DynamicContent2" }) {
+            HWND feeds = FindWindowExW(g_taskbar, nullptr, cls, nullptr);
+            if (!feeds || !IsWindowVisible(feeds)) continue;
+            RECT fr;
+            GetWindowRect(feeds, &fr);
+            if (fr.left < edge && fr.right > fr.left) edge = fr.left;
+        }
     // Step past the Widgets button when it sits where we would go.
     RECT wb = WidgetsButtonRect();
     if (wb.right > wb.left && wb.top < bar.bottom && wb.bottom > bar.top &&

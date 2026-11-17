@@ -1,13 +1,24 @@
-# VAXEE 4K receiver and ZYGEN NP-01S V2
+# VAXEE 4K/8K receivers and ZYGEN NP-01S V2
 
 ## Scope and hardware validation
 
-This driver supports the VAXEE 4K receiver `3057:1002` and the ZYGEN NP-01S V2
-Wireless over USB cable (`3057:1011`), on their vendor collection `FF05:0001`
-with a 64-byte feature report. Other VAXEE receivers, other cable product IDs
-and ZOWIE devices are deliberately not probed.
+This driver supports the VAXEE 4K receiver `3057:1002`, the VAXEE 8K receiver
+`3057:2002` and the ZYGEN NP-01S V2 Wireless over USB cable (`3057:1011`), on
+their vendor collection `FF05:0001` with a 64-byte feature report. Other VAXEE
+receivers, other cable product IDs and ZOWIE devices are deliberately not
+probed.
 
-A real receiver was tested on Windows:
+The 8K receiver (`VAXEE 8K Wireless`, paired with an NP-01 Ergo Wireless 8K)
+was tested on Windows and reported through the same protocol:
+
+```
+VAXEE 8K Wireless  [2.4 GHz receiver]  70%
+```
+
+The receiver is shared by all VAXEE 8K mice and does not report which one is
+paired, so it is shown by its own name. Charging status on the 8K receiver has not yet been observed on hardware.
+
+A real 4K receiver was tested on Windows:
 
 ```
 VAXEE collection: page=FF05 usage=0001 featureLength=64

@@ -48,6 +48,7 @@ std::vector<DeviceStatus> PollAllDevices() {
     PollGlorious(ctx);
     PollAula(ctx);       // before Kysona, which shares the 3554 vendor id and would probe it first
     PollDareu(ctx);
+    PollDarmoshark(ctx);
     PollAtkSerial(ctx);  // before Kysona, which shares the ATK vendor id
     PollPulsar(ctx);     // before Kysona, which also scans the 3710 vendor id
     PollAtkBitmouse(ctx);  // before Kysona, which would probe the NK dongle with the wrong protocol
@@ -73,11 +74,15 @@ std::vector<DeviceStatus> PollAllDevices() {
     PollRapoo(ctx);
     PollAreson(ctx);
     PollMchoseG3(ctx);
+    PollMsi(ctx);
+    PollMachenike(ctx);  // before Ajazz in PollMiscMice, which shares the L7's 248A vendor id
+    PollMchoseModern(ctx);
     PollMiscMice(ctx);
     PollFantech(ctx);
     PollRazerHeadsets(ctx);  // before the generic Razer driver, which shares the vendor id
     PollHyperX(ctx);
     PollLogitechG435(ctx);  // before the HID++ driver, which shares the vendor id
+    PollAstro(ctx);
     PollLogitech(ctx);
     PollRazer(ctx);
     PollSteelSeries(ctx);
@@ -88,6 +93,7 @@ std::vector<DeviceStatus> PollAllDevices() {
     PollGameSir(ctx);
     PollFlydigi(ctx);
     PollGameSirCyclone(ctx);
+    Poll8BitDo(ctx);
     PollAirPods(ctx);  // before the Bluetooth fallback, which has no level for AirPods
     PollPhoneLink(ctx);
     PollGalaxyBuds(ctx);  // before the Bluetooth fallback, which skips devices already listed by name

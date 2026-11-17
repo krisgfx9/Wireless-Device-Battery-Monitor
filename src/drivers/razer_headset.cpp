@@ -7,6 +7,10 @@
 // most once every 5 minutes and the last reading is reused in between.
 // Protocol from OpenRazer PR #2794 (docs/v3_pro_protocol.md) and github.com/ReedME/omarchy-blackshark-v3.
 //
+// BlackShark V2 Pro (2020), 2.4 GHz receiver 1532:0528, uses feature report FF on FF00:0001.
+// Request from https://github.com/openrazer/openrazer/issues/1280#issuecomment-1094116217.
+// Reply and power states documented in https://github.com/HeyOkay/HaloBattery/blob/main/providers/blackshark2020.py.
+//
 // BlackShark V2 Pro (2023), HyperSpeed dongle 1532:0555, vendor collection (usage page FF00).
 // 64-byte output report 02, "PA" envelope: [02][80][8+len][00 00]['P']['A'][08][00][type][cmd][flag][len].
 // Remote mode on/off = [02][80][07][00 00]['P']['A'][0E][00][02][E1][1/0]; Synapse asserts it around
@@ -31,6 +35,7 @@
 #include "drivers.h"
 
 #include <algorithm>
+#include <iterator>
 #include <map>
 
 namespace {
@@ -158,6 +163,47 @@ void PollBlackSharkV2HyperSpeed(PollContext& ctx) {
         s.charging = charging > 0;
         ctx.Add(s, 0x1532, pid);
         return;
+    }
+}
+
+void PollBlackSharkV2Pro2020(PollContext& ctx) {
+    constexpr USHORT vid = 0x1532, pid = 0x0528;
+    constexpr int reportLen = 64, maxReads = 5;
+    constexpr BYTE reply[] = { 0xFF, 0x0F, 0x05, 0xFE, 0x12, 0x04, 0x1F, 0x08, 0x05 };
+    constexpr BYTE stale[] = { 0xFF, 0x01, 0x00, 0xFE, 0x12, 0x04, 0x1F, 0x08, 0x05 };
+    if (ctx.IsClaimed(vid, pid)) return;
+    auto colls = ctx.Find(vid, pid, [](const HidColl& c) {
+        return c.iface == 3 && c.page() == 0xFF00 && c.usage() == 0x0001 && c.featLen() == reportLen;
+    });
+    for (const HidColl* c : colls) {
+        HidDev d;
+        if (!d.OpenFeatureOnly(*c)) continue;
+        if (!d.SetFeature({ 0xFF, 0x0A, 0x00, 0xFD, 0x04, 0x12, 0xF1, 0x02, 0x05 })) continue;
+
+        std::vector<BYTE> r;
+        for (int read = 0; read < maxReads; ++read) {
+            Sleep(100);  // Synapse waits about 100 ms for the receiver to fetch headset status.
+            if (!d.GetFeature(0xFF, r) || r.size() != reportLen) continue;
+            const bool fresh = std::equal(std::begin(reply), std::end(reply), r.begin());
+            // Give an in-flight request time to replace the old payload before reporting offline.
+            const bool offline = read == maxReads - 1 && std::equal(std::begin(stale), std::end(stale), r.begin());
+            if (!fresh && !offline) continue;
+
+            DeviceStatus s;
+            s.key = L"blackshark:" + Hex4(pid);
+            s.name = L"Razer BlackShark V2 Pro (2020)";
+            s.kind = DeviceKind::Headset;
+            s.via = L"2.4 GHz receiver";
+            s.millivolts = fresh ? (r[12] << 8) | r[13] : 0;
+            s.connected = s.millivolts != 0;
+            if (s.connected) {
+                s.charging = r[11] == 0x09;
+                // The receiver can jump to 80% as soon as charging starts, even from 10%.
+                if (!s.charging && r[14] <= 100) s.percent = r[14];
+            }
+            ctx.Add(s, vid, pid);
+            return;
+        }
     }
 }
 
@@ -394,6 +440,7 @@ void PollBlackSharkV3X(PollContext& ctx) {
 void PollRazerHeadsets(PollContext& ctx) {
     PollBlackSharkV2HyperSpeed(ctx);
     PollBarracudaX(ctx);
+    PollBlackSharkV2Pro2020(ctx);
     PollBlackSharkV2Pro2023(ctx);
     PollBlackSharkV3X(ctx);
     for (USHORT pid : { (USHORT)0x0576, (USHORT)0x0577, (USHORT)0x0579, (USHORT)0x057A }) {

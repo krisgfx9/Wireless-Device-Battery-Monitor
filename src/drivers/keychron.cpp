@@ -127,10 +127,63 @@ const wchar_t* Name4k(USHORT productId) {
     return nullptr;
 }
 
+// Older Keychron mice (M1, M2, M3, M3 mini, M6, M7 ...) on the 1K 2.4 GHz receiver (3434:D030
+// Type-A, D031 Type-C), as read by the "Keychron" desktop app (DeviceDriver.exe). The receiver
+// exposes a vendor collection on usage page 0x8C (MI_01) with a 1001-byte feature report 0x51.
+// SetFeature [51][cmd] queues a command, GetFeature 51 returns the reply [51][cmd][01 = ok]...
+// Command 06 (device status) answers [51][06][01][00][vid lo][vid hi][pid lo][pid hi][..][..][..]
+// [battery %][charging: 01]; the vid/pid are the mouse's own (e.g. 3434:D033 for an M3).
+// Read-only; checked on a real M3 on the D030 receiver.
+constexpr USHORT kLegacyA = 0xD030;    // 1K receiver, Type-A
+constexpr USHORT kLegacyC = 0xD031;    // 1K receiver, Type-C
+constexpr BYTE kLegacyReport = 0x51;
+constexpr BYTE kLegacyStatus = 0x06;
+
+std::wstring LegacyName(USHORT pid) {
+    switch (pid) {
+        case 0xD032: case 0xD033: return L"Keychron M3";
+        case 0xD035: return L"Keychron M1";
+        case 0xD036: case 0xD03E: return L"Keychron M3 mini";
+        case 0xD03B: return L"Keychron M2";
+        case 0xD03D: return L"Keychron M2 mini";
+        case 0xD03F: return L"Keychron M6";
+        case 0xD044: return L"Keychron M7";
+        default: return L"Keychron mouse";
+    }
+}
+
+void PollLegacy(PollContext& ctx) {
+    for (USHORT rpid : {kLegacyA, kLegacyC}) {
+        for (const HidColl* c : ctx.Find(0x3434, rpid, [](const HidColl& c) { return c.page() == 0x8C && c.featLen() >= 16; })) {
+            HidDev d;
+            if (!d.Open(*c) && !d.OpenFeatureOnly(*c)) continue;
+            if (!d.SetFeature({kLegacyReport, kLegacyStatus})) continue;
+            std::vector<BYTE> r;
+            bool got = false;
+            for (int i = 0; i < 5 && !got; i++) {  // the reply is usually there at once; give the mouse up to ~200 ms
+                Sleep(40);
+                got = d.GetFeature(kLegacyReport, r) && r.size() >= 13 && r[0] == kLegacyReport && r[1] == kLegacyStatus;
+            }
+            if (!got || r[2] != 0x01 || (USHORT)(r[4] | (r[5] << 8)) != 0x3434 || r[11] > 100) continue;
+            USHORT mpid = (USHORT)(r[6] | (r[7] << 8));
+            DeviceStatus s;
+            s.key = L"keychron:" + Hex4(mpid);
+            s.name = LegacyName(mpid);
+            s.kind = DeviceKind::Mouse;
+            s.via = L"2.4 GHz receiver";
+            s.percent = r[11];
+            s.charging = r[12] == 0x01;
+            ctx.Add(s, 0x3434, rpid);
+            break;
+        }
+    }
+}
+
 }  // namespace
 
 void PollKeychron(PollContext& ctx) {
     PollNape(ctx);
+    PollLegacy(ctx);
     for (auto [vid, pid] : ctx.Products(0x3434)) {
         for (const HidColl* c : ctx.Find(vid, pid, [](const HidColl& c) { return c.page() >= 0xFF00 && c.outLen() == 65 && c.inLen() == 65; })) {
             HidDev d;

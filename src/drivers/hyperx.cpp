@@ -1,5 +1,8 @@
-// HyperX wireless headsets and Pulsefire mice (HP VID 03F0, older Kingston VID 0951).
-// Protocols: Cloud III Wireless verified on hardware (03F0:0C9D) and github.com/Medprj/HyperXWM;
+
+// HyperX wireless headsets and Pulsefire Haste 2 mice (HP VID 03F0, older Kingston VID 0951).
+// Protocols: Pulsefire Haste 2 Wireless (03F0:0F98) and Haste 2 Core Wireless (03F0:0AB5), see HasteWireless;
+// Cloud III Wireless verified on hardware (03F0:0C9D) and github.com/Medprj/HyperXWM;
+
 // Cloud III S from github.com/LennardKittner/HyperHeadset; Cloud Stinger Core from
 // github.com/davidsantanaalves/HyperBatteryMonitor; the others follow github.com/Sapd/HeadsetControl.
 #include "drivers.h"
@@ -116,6 +119,47 @@ bool CloudAlpha2(const HidColl& c, DeviceStatus& s) {
     return true;
 }
 
+// Pulsefire Haste 2 (Core) Wireless: NGENUITY's read-only battery query, the same 52 01 / 50 02 pair as
+// Cloud Alpha 2, on the dongle's vendor collection (interface 2). 64-byte reports.
+// From github.com/PMarinov1994/ngenuity-linux-cli (Haste 2 Wireless). Verified on a Core Wireless (03F0:0AB5);
+// the Haste 2 Wireless dongles (0D97, 0F98) are untested.
+bool HasteWireless(const HidColl& c, DeviceStatus& s) {
+    HidDev d;
+    if (!d.Open(c)) return false;
+    auto q = [&](BYTE cmd, BYTE sub, std::vector<BYTE>& r) {
+        return Query(d, { cmd, sub }, r, 1000, [cmd, sub](const std::vector<BYTE>& r) { return r.size() >= 8 && r[0] == cmd + 1 && r[1] == sub; });
+    };
+    std::vector<BYTE> r;
+    // After a reconnect the dongle floods the channel with unrelated reports (44 xx, 45 xx, FB xx) and the
+    // link reply can miss the time limit, so a missing link reply is not an error: the battery query decides.
+    bool linkKnown = q(0x52, 0x01, r);
+    bool linked = !linkKnown || r[2] != 0;
+    bool gotBattery = linked && q(0x50, 0x02, r) && r[2] <= 100;
+    if (!linkKnown && !gotBattery) return false;
+
+    // For about 5 s after it powers on the mouse reports 40% instead of its real level (measured 2026-11-17 on
+    // a Core Wireless: 40% for 2-5 s, then 70%). A reading inside that settle window is not trusted. The first
+    // poll after the app starts assumes the mouse has been on for a while.
+    static ULONGLONG linkUpAt = 0;
+    static bool polled = false;
+    const ULONGLONG kSettleMs = 6000;
+    ULONGLONG now = GetTickCount64();
+    if (!linked) linkUpAt = 0;
+    else if (linkUpAt == 0) linkUpAt = polled ? now : now - kSettleMs;
+    polled = true;
+    bool settled = now - linkUpAt >= kSettleMs;
+
+    s = Base(c.pid, c.pid == 0x0AB5 ? L"HyperX Pulsefire Haste 2 Core Wireless" : L"HyperX Pulsefire Haste 2 Wireless");
+    s.kind = DeviceKind::Mouse;
+    s.connected = linked;
+    if (gotBattery && settled) {  // an unsettled reading stays unknown, so the tray keeps the last value dimmed
+        s.percent = r[2];
+        s.charging = r[3] == 0x01 || r[3] == 0x02;
+        s.millivolts = r[6] | (r[7] << 8);
+    }
+    return true;
+}
+
 // Cloud Flight: 21 FF 05 -> [3..4] mV (above 0x100B means charging).
 bool CloudFlight(const HidColl& c, DeviceStatus& s) {
     HidDev d;
@@ -184,8 +228,9 @@ bool PulsefireHaste2(const HidColl& c, DeviceStatus& s) {
 // SetFeature(command), wait 20 ms, GetFeature(FF):
 //   connection: reply [11] == 1 means the headset is on.
 //   battery:    reply [9] = 03 discharging / 05 charging / 06 full, [11..12] = battery mV (little endian).
-// The 0A93 receiver can first hand back the previous report (FF 01 00 ...); its battery reply is FF 12 05,
-// so on that receiver the reply is read again (up to 10 x 20 ms) until it looks right.
+// The PlayStation receivers (03F0:0A93, 0951:1713) can first hand back the previous report (FF 01 00 ...);
+// their battery reply is FF 12 05, so on them the reply is read again (up to 10 x 20 ms) until it looks right.
+// 0951:1713 (Kingston PlayStation receiver, same MI_03 layout as 0A93) was verified on hardware.
 bool StingerCore(const HidColl& c, DeviceStatus& s) {
     static const std::vector<BYTE> kConnection = { 0xFF, 0x07, 0x00, 0xFD, 0x04, 0x00, 0x00, 0x02, 0x82, 0x03,
                                                    0x05, 0x29, 0x0F, 0x00, 0x00, 0x03, 0x68, 0x10, 0x00, 0x00 };
@@ -197,7 +242,7 @@ bool StingerCore(const HidColl& c, DeviceStatus& s) {
 
     HidDev d;
     if (!d.Open(c)) return false;
-    const bool ps = c.pid == 0x0A93;
+    const bool ps = c.pid == 0x0A93 || c.pid == 0x1713;
     auto exchange = [&](const std::vector<BYTE>& cmd, std::vector<BYTE>& r, bool (*good)(const std::vector<BYTE>&)) {
         if (!d.SetFeature(cmd)) return false;
         for (int i = 0; i < (ps ? 10 : 1); i++) {
@@ -247,11 +292,13 @@ const Model kModels[] = {
     { 0x0951, { 0x1718 }, [](const HidColl& c) { return c.outLen() == 62; }, Cloud2Kingston },
     { 0x03F0, { 0x098D }, [](const HidColl& c) { return c.page() >= 0xFF00 && c.outLen() >= 3; }, CloudAlpha },
     { 0x03F0, { 0x08BE }, [](const HidColl& c) { return c.page() == 0xFF13 && c.usage() == 0xFF00; }, CloudAlpha2 },
+    // Pulsefire Haste 2 Wireless (0D97, 0F98) and Haste 2 Core Wireless (0AB5) dongles.
+    { 0x03F0, { 0x0AB5, 0x0D97, 0x0F98 }, [](const HidColl& c) { return c.page() >= 0xFF00 && c.outLen() >= 2 && c.inLen() >= 8; }, HasteWireless },
     { 0x0951, { 0x16C4, 0x1723, 0x1749 }, [](const HidColl& c) { return c.page() >= 0xFF00 && c.outLen() >= 3; }, CloudFlight },
     { 0x03F0, { 0x0E90 }, [](const HidColl& c) { return c.page() >= 0xFF00 && c.outLen() >= 3; }, CloudFlight },  // Cloud Flight (HP)
-    // Cloud Stinger Core Wireless: PlayStation receiver (HP) and the original Kingston receiver.
+    // Cloud Stinger Core Wireless: PlayStation receivers (HP 0A93, Kingston 1713) and the original Kingston receiver.
     { 0x03F0, { 0x0A93 }, [](const HidColl& c) { return c.page() == 0xFF00 && c.usage() == 0x0001 && c.featLen() >= 32; }, StingerCore },
-    { 0x0951, { 0x170B }, [](const HidColl& c) { return c.page() == 0xFF00 && c.usage() == 0x0001 && c.featLen() >= 32; }, StingerCore },
+    { 0x0951, { 0x170B, 0x1713 }, [](const HidColl& c) { return c.page() == 0xFF00 && c.usage() == 0x0001 && c.featLen() >= 32; }, StingerCore },
 };
 
 }  // namespace

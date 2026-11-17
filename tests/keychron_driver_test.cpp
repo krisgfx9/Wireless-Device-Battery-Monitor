@@ -56,6 +56,34 @@ PollContext Poll(const HidColl& c, std::map<std::pair<BYTE, BYTE>, std::vector<B
     PollKeychron(ctx);
     return ctx;
 }
+
+// 1K receiver (D030/D031): feature report 0x51 on the vendor collection of usage page 0x8C.
+std::vector<BYTE> featureReply;               // what GetFeature returns after a matching SetFeature
+std::vector<std::vector<BYTE>> featureWrites;
+bool featureQueued = false;
+
+HidColl LegacyCollection(USHORT pid) {
+    HidColl c;
+    c.path = L"keychron-1k";
+    c.vid = 0x3434;
+    c.pid = pid;
+    c.caps.UsagePage = 0x8C;
+    c.caps.Usage = 0x01;
+    c.caps.FeatureReportByteLength = 1001;
+    return c;
+}
+
+// Status reply [51][06][ok][00][vid lo][vid hi][pid lo][pid hi][..][..][..][battery %][charging].
+std::vector<BYTE> Status(BYTE ok, USHORT vid, USHORT pid, BYTE battery, BYTE charging) {
+    return { 0x51, 0x06, ok, 0x00, (BYTE)vid, (BYTE)(vid >> 8), (BYTE)pid, (BYTE)(pid >> 8), 0, 0, 0, battery, charging };
+}
+
+PollContext PollReceiver1k(const HidColl& c, std::vector<BYTE> reply) {
+    featureReply = std::move(reply);
+    featureWrites.clear();
+    featureQueued = false;
+    return Poll(c, {});
+}
 }  // namespace
 
 // Stand-ins for the Win32 HID transport. The production driver is linked unchanged.
@@ -81,6 +109,20 @@ int HidDev::Read(std::vector<BYTE>& out, int timeoutMs) {
     out = pending.front();
     pending.erase(pending.begin());
     return (int)out.size();
+}
+bool HidDev::OpenFeatureOnly(const HidColl& c) { return Open(c); }
+bool HidDev::SetFeature(const std::vector<BYTE>& data) {
+    featureWrites.push_back(data);
+    featureQueued = data.size() >= 2 && data[0] == 0x51 && data[1] == 0x06 && !featureReply.empty();
+    return true;
+}
+bool HidDev::GetFeature(BYTE reportId, std::vector<BYTE>& out) {
+    assert(reportId == 0x51);
+    out.assign(c_.featLen(), 0);
+    out[0] = reportId;
+    if (!featureQueued) return true;  // nothing queued yet: the report reads back empty
+    std::copy(featureReply.begin(), featureReply.end(), out.begin());
+    return true;
 }
 std::wstring HidProduct(const HidColl&) { return L"Keychron 4K Link"; }
 std::wstring Hex4(USHORT v) {
@@ -170,5 +212,40 @@ int main() {
         assert(ctx.out.empty() && writes.empty());
     }
     assert(opens == 0);
-    std::puts("Keychron driver tests passed (4K Link, 8K Nordic, no battery, filtering).");
+
+    // 1K receiver (D030): M3 (D033) at 87 %, not charging. Only the status command is sent, the
+    // receiver is claimed and the 65-byte protocol is not tried on it.
+    const auto legacyA = LegacyCollection(0xD030);
+    ctx = PollReceiver1k(legacyA, Status(0x01, 0x3434, 0xD033, 87, 0x00));
+    assert((featureWrites == std::vector<std::vector<BYTE>>{ { 0x51, 0x06 } }));
+    assert(writes.empty());
+    assert(ctx.out.size() == 1);
+    assert(ctx.out[0].key == L"keychron:D033" && ctx.out[0].name == L"Keychron M3");
+    assert(ctx.out[0].percent == 87 && !ctx.out[0].charging);
+    assert(ctx.out[0].kind == DeviceKind::Mouse && ctx.out[0].via == L"2.4 GHz receiver");
+    assert(ctx.IsClaimed(0x3434, 0xD030));
+
+    // Type-C receiver (D031), charging; an unknown mouse pid gets the generic name.
+    ctx = PollReceiver1k(LegacyCollection(0xD031), Status(0x01, 0x3434, 0xD0FF, 100, 0x01));
+    assert(ctx.out.size() == 1 && ctx.out[0].percent == 100 && ctx.out[0].charging);
+    assert(ctx.out[0].name == L"Keychron mouse" && ctx.IsClaimed(0x3434, 0xD031));
+
+    // Error status, foreign vendor id, battery out of range, or no reply: nothing listed or claimed.
+    for (const auto& bad : { Status(0x00, 0x3434, 0xD033, 50, 0), Status(0x01, 0x1234, 0xD033, 50, 0),
+                             Status(0x01, 0x3434, 0xD033, 101, 0), std::vector<BYTE>{} }) {
+        ctx = PollReceiver1k(legacyA, bad);
+        assert(ctx.out.empty() && ctx.claimed.empty());
+    }
+
+    // The same usage page without a feature report, or another receiver pid: never opened.
+    opens = 0;
+    auto noFeature = legacyA;
+    noFeature.caps.FeatureReportByteLength = 0;
+    auto otherPid = LegacyCollection(0xD038);
+    for (const auto& c : { noFeature, otherPid }) {
+        ctx = PollReceiver1k(c, Status(0x01, 0x3434, 0xD033, 87, 0));
+        assert(ctx.out.empty() && featureWrites.empty());
+    }
+    assert(opens == 0);
+    std::puts("Keychron driver tests passed (4K Link, 8K Nordic, 1K receiver, no battery, filtering).");
 }
