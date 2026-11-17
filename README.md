@@ -145,10 +145,18 @@ anywhere and run `WirelessBattery.exe`.
 ## Command line
 
 ```
-WirelessBattery.exe --list   # print every device and its battery level, then exit
-WirelessBattery.exe --dump   # print every HID collection, plus raw Xenta (1D57) status frames (useful when asking for a new device)
-WirelessBattery.exe --quit   # close the running instance
+WirelessBattery.exe --list     # print every device and its battery level, then exit
+WirelessBattery.exe --dump     # every HID collection, HID devices that could not be opened, all USB devices (also ones
+                               # without a HID interface) and Bluetooth devices; also saved to %TEMP%\WirelessBattery-dump.txt
+WirelessBattery.exe --report   # open the "Request support for a device" window
+WirelessBattery.exe --quit     # close the running instance
 ```
+
+**Device not shown?** Right-click the widget or tray icon and choose **Request support for a device...**. Pick the device, check
+what will be sent (it is shown word for word: the device name, its type, its USB/HID ids and interface layout, and your optional
+name and notes) and click **Send**. It goes on the public list at [krisgfx.com/tools](https://krisgfx.com/tools/#requested) and
+opens or updates a GitHub issue. **Copy full report** puts the complete `--dump` on the clipboard for the issue. This window is
+the only place the app connects to the internet, and only when you click Send.
 
 ## Build
 

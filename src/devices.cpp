@@ -7,6 +7,7 @@
 #include <cwchar>
 
 #include "drivers/drivers.h"
+#include "report.h"
 #include "hid.h"
 
 namespace {
@@ -113,6 +114,7 @@ std::wstring DumpHidCollections() {
                  c.featLen());
         out += line + HidProduct(c) + L"\n";
     }
+    out += report::DumpExtras();  // unopenable HID collections, non-HID USB devices, Bluetooth devices
     out += DumpXentaFrames();
     return out;
 }

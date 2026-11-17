@@ -15,6 +15,7 @@
 
 #include "devices.h"
 #include "i18n.h"
+#include "report.h"
 #include "widget.h"
 
 namespace {
@@ -29,7 +30,7 @@ constexpr int LOW_BATTERY = 15;
 constexpr UINT PLACEHOLDER_ID = 1;
 
 enum MenuId : UINT {
-    ID_REFRESH = 100, ID_AUTOSTART, ID_HIDE_LAST_KNOWN, ID_WIDGET_BACKGROUND, ID_EXIT, ID_MODE_WIDGET, ID_MODE_TRAY, ID_SUPPORT,
+    ID_REFRESH = 100, ID_AUTOSTART, ID_HIDE_LAST_KNOWN, ID_WIDGET_BACKGROUND, ID_EXIT, ID_MODE_WIDGET, ID_MODE_TRAY, ID_SUPPORT, ID_REPORT,
     ID_LANG_EN, ID_LANG_TR,
     ID_DEVICE_FIRST = 1000
 };
@@ -605,6 +606,7 @@ void ShowMenu() {
     AppendMenuW(lang, MF_STRING, ID_LANG_TR, L"T\u00fcrk\u00e7e");
     CheckMenuRadioItem(lang, ID_LANG_EN, ID_LANG_TR, UiTurkish() ? ID_LANG_TR : ID_LANG_EN, MF_BYCOMMAND);
     AppendMenuW(m, MF_POPUP, (UINT_PTR)lang, T(L"Language"));
+    AppendMenuW(m, MF_STRING, ID_REPORT, T(L"Request support for a device..."));
     AppendMenuW(m, MF_STRING, ID_SUPPORT, T(L"Support the project..."));
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING, ID_EXIT, T(L"Exit"));
@@ -624,6 +626,7 @@ void ShowMenu() {
         case ID_LANG_EN: SetTurkishUi(false); break;
         case ID_LANG_TR: SetTurkishUi(true); break;
         case ID_SUPPORT: ShellExecuteW(nullptr, L"open", L"https://github.com/sponsors/krisgfx9", nullptr, nullptr, SW_SHOWNORMAL); break;
+        case ID_REPORT: report::Show(g_inst, g_hwnd); break;
         case ID_EXIT: DestroyWindow(g_hwnd); break;
         default:
             if (cmd >= ID_DEVICE_FIRST && cmd < ID_DEVICE_FIRST + keys.size() * DEV_STRIDE) {
@@ -724,7 +727,29 @@ int ListToConsole(bool dump) {
         WriteFile(out, u.data(), (DWORD)u.size(), &w, nullptr);
     };
     if (dump) {
-        write(DumpHidCollections());
+        // Also saved to a file: PowerShell does not wait for this windowed exe, so console output can end up
+        // after the prompt or get lost, and a double-click has no console at all.
+        std::wstring text = DumpHidCollections();
+        wchar_t path[MAX_PATH] = {};
+        GetTempPathW(MAX_PATH, path);
+        wcscat_s(path, L"WirelessBattery-dump.txt");
+        HANDLE f = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (f != INVALID_HANDLE_VALUE) {
+            std::wstring crlf;
+            for (wchar_t ch : text) crlf += ch == L'\n' ? std::wstring(L"\r\n") : std::wstring(1, ch);
+            int n = WideCharToMultiByte(CP_UTF8, 0, crlf.c_str(), (int)crlf.size(), nullptr, 0, nullptr, nullptr);
+            std::string u = "\xEF\xBB\xBF" + std::string(n, 0);  // UTF-8 byte order mark, so Notepad shows it right
+            WideCharToMultiByte(CP_UTF8, 0, crlf.c_str(), (int)crlf.size(), u.data() + 3, n, nullptr, nullptr);
+            DWORD w;
+            WriteFile(f, u.data(), (DWORD)u.size(), &w, nullptr);
+            CloseHandle(f);
+        }
+        if (out && out != INVALID_HANDLE_VALUE) {
+            write(text);
+            write(std::wstring(L"\nAlso saved to ") + path + L"\n");
+        } else {
+            ShellExecuteW(nullptr, L"open", path, nullptr, nullptr, SW_SHOWNORMAL);  // no console: show the file
+        }
         return 0;
     }
     auto list = PollAllDevices();
@@ -749,6 +774,16 @@ int ListToConsole(bool dump) {
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     if (cmdLine && wcsstr(cmdLine, L"--list")) return ListToConsole(false);
     if (cmdLine && wcsstr(cmdLine, L"--dump")) return ListToConsole(true);
+    if (cmdLine && wcsstr(cmdLine, L"--report")) {  // the "Request support for a device" window on its own
+        report::Show(inst, nullptr);
+        MSG msg;
+        while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            if (report::PreTranslate(&msg)) continue;
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        return 0;
+    }
     if (cmdLine && wcsstr(cmdLine, L"--quit")) {  // used by the installer before upgrading/uninstalling
         if (HWND w = FindWindowW(L"WirelessBatteryWnd", nullptr)) {
             PostMessageW(w, WM_CLOSE, 0, 0);
@@ -795,6 +830,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
 
     MSG m;
     while (GetMessageW(&m, nullptr, 0, 0) > 0) {
+        if (report::PreTranslate(&m)) continue;
         TranslateMessage(&m);
         DispatchMessageW(&m);
     }

@@ -34,6 +34,7 @@ const Entry kTurkish[] = {
     { L"Refresh now", L"\u015eimdi yenile" },
     { L"Start with Windows", L"Windows ile ba\u015flat" },
     { L"Language", L"Dil" },
+    { L"Request support for a device...", L"Bir cihaz i\u00e7in destek iste..." },
     { L"Support the project...", L"Projeyi destekle..." },
     { L"Exit", L"\u00c7\u0131k\u0131\u015f" },
     // Battery levels of devices that only report a coarse level.
