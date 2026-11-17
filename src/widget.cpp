@@ -29,40 +29,12 @@ int Px(int v) { return MulDiv(v, Dpi(), 96); }
 // left-aligned (start-aligned on right-to-left Windows). It is XAML, so only UI Automation knows
 // where it is. The element is looked up once per taskbar; its rectangle is re-read at most every
 // few seconds because the weather text changes its width.
+// Diagnostic workaround: avoid synchronous Windows UI Automation queries against
+// Explorer's taskbar. On some Windows 11 builds, FindFirst(TreeScope_Descendants)
+// can hang when this app owns a child window of Shell_TrayWnd.
+// Trade-off: the overlay may overlap the native Windows Widgets/weather control.
 RECT WidgetsButtonRect() {
-    static IUIAutomation* uia = nullptr;
-    static ULONGLONG last = 0;
-    static RECT cached{};
-    ULONGLONG now = GetTickCount64();
-    if (last && now - last < 5000) return cached;
-    last = now;
-    cached = {};
-    if (!uia) {
-        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);  // UI thread; harmless if already initialised
-        if (FAILED(CoCreateInstance(__uuidof(CUIAutomation), nullptr, CLSCTX_INPROC_SERVER, __uuidof(IUIAutomation), (void**)&uia)))
-            return cached;
-    }
-    if (!g_widgetsBtn) {
-        IUIAutomationElement* root = nullptr;
-        IUIAutomationCondition* cond = nullptr;
-        VARIANT id;
-        VariantInit(&id);
-        id.vt = VT_BSTR;
-        id.bstrVal = SysAllocString(L"WidgetsButton");
-        if (SUCCEEDED(uia->ElementFromHandle(g_taskbar, &root)) && root &&
-            SUCCEEDED(uia->CreatePropertyCondition(UIA_AutomationIdPropertyId, id, &cond)) && cond)
-            root->FindFirst(TreeScope_Descendants, cond, &g_widgetsBtn);
-        VariantClear(&id);
-        if (cond) cond->Release();
-        if (root) root->Release();
-        if (!g_widgetsBtn) return cached;
-    }
-    if (FAILED(g_widgetsBtn->get_CurrentBoundingRectangle(&cached))) {
-        g_widgetsBtn->Release();  // stale (Widgets turned off, Explorer restarted): look it up again next time
-        g_widgetsBtn = nullptr;
-        cached = {};
-    }
-    return cached;
+    return RECT{};
 }
 
 void ApplyTipTheme() {
