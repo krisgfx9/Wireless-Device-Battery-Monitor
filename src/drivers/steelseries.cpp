@@ -55,13 +55,14 @@ bool Arctis9(HidDev& d, USHORT pid, DeviceStatus& s) {
     return true;
 }
 
-// Arctis Pro Wireless: 41 AA -> [0]==02 offline; 40 AA -> [0] level 0..4.
+// Arctis Pro Wireless: unnumbered report ID 00, then 41 AA -> [0]==02 offline;
+// 00 40 AA -> [0] level 0..4. HidDev strips the leading 00 from input reports.
 bool ArctisProWireless(HidDev& d, USHORT pid, DeviceStatus& s) {
     std::vector<BYTE> r;
-    if (!WriteRead(d, { 0x41, 0xAA }, r) || r.empty()) return false;
+    if (!WriteRead(d, { 0x00, 0x41, 0xAA }, r) || r.empty()) return false;
     s = Headset(pid, L"SteelSeries Arctis Pro Wireless");
     s.connected = r[0] != 0x02;
-    if (s.connected && WriteRead(d, { 0x40, 0xAA }, r) && !r.empty()) s.percent = MapTo100(r[0], 0, 4);
+    if (s.connected && WriteRead(d, { 0x00, 0x40, 0xAA }, r) && !r.empty()) s.percent = MapTo100(r[0], 0, 4);
     return true;
 }
 

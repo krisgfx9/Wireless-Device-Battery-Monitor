@@ -26,7 +26,7 @@ jobs:
         shell: msys2 {0}
         run: make
 
-      - name: Test Rapoo protocol and driver
+      - name: Test device protocols and drivers
         shell: msys2 {0}
         run: make test
 
