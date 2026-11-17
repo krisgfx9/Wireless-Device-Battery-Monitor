@@ -1,6 +1,7 @@
 #include "widget.h"
 
 #include <commctrl.h>
+#include <uiautomation.h>
 #include <algorithm>
 
 namespace {
@@ -21,6 +22,71 @@ int Dpi() {
     return d ? (int)d : 96;
 }
 int Px(int v) { return MulDiv(v, Dpi(), 96); }
+
+// Windows 11 with a left-aligned taskbar puts the Widgets (weather) button right next to the tray.
+// It is XAML without its own HWND, so find it with UI Automation. Returns its left edge in screen
+// coordinates when it sits next to the tray, else -1.
+// UI Automation is only touched when the settings say the button can be there (widgets on, taskbar
+// left-aligned), never within 5 s of those settings changing (Explorer is rebuilding the taskbar
+// then), and at most every 10 s. A disabled button can linger in the UIA tree, so offscreen ones
+// are ignored.
+DWORD TaskbarSetting(const wchar_t* name, DWORD def) {
+    DWORD v = def, size = sizeof(v);
+    RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced", name,
+                 RRF_RT_REG_DWORD, nullptr, &v, &size);
+    return v;
+}
+
+LONG WidgetsButtonLeft(const RECT& tray) {
+    static IUIAutomation* uia = nullptr;
+    static ULONGLONG lastAt = 0, cfgAt = 0;
+    static DWORD lastCfg = ~0u;
+    static LONG cached = -1;
+    ULONGLONG now = GetTickCount64();
+    DWORD cfg = (TaskbarSetting(L"TaskbarDa", 1) ? 1 : 0) | (TaskbarSetting(L"TaskbarAl", 1) ? 2 : 0);
+    if (cfg != lastCfg) {
+        lastCfg = cfg;
+        cfgAt = now;
+        lastAt = 0;
+        cached = -1;
+    }
+    if (cfg != 1) return -1;  // widgets off, or centered taskbar (widgets sit on the far left)
+    if (now - cfgAt < 5000) return -1;
+    if (lastAt && now - lastAt < 10000) return cached;
+    lastAt = now;
+    cached = -1;
+    if (!uia) {
+        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        if (FAILED(CoCreateInstance(__uuidof(CUIAutomation), nullptr, CLSCTX_INPROC_SERVER, __uuidof(IUIAutomation),
+                                    (void**)&uia))) {
+            uia = nullptr;
+            return -1;
+        }
+    }
+    IUIAutomationElement* bar = nullptr;
+    if (FAILED(uia->ElementFromHandle(g_taskbar, &bar)) || !bar) return -1;
+    VARIANT id;
+    VariantInit(&id);
+    id.vt = VT_BSTR;
+    id.bstrVal = SysAllocString(L"WidgetsButton");
+    IUIAutomationCondition* cond = nullptr;
+    uia->CreatePropertyCondition(UIA_AutomationIdPropertyId, id, &cond);
+    VariantClear(&id);
+    IUIAutomationElement* btn = nullptr;
+    if (cond) bar->FindFirst(TreeScope_Descendants, cond, &btn);
+    if (btn) {
+        RECT r;
+        BOOL offscreen = TRUE;
+        if (SUCCEEDED(btn->get_CurrentIsOffscreen(&offscreen)) && !offscreen &&
+            SUCCEEDED(btn->get_CurrentBoundingRectangle(&r)) && r.right > r.left && r.right <= tray.left + Px(2) &&
+            tray.left - r.right < Px(48))
+            cached = r.left;
+        btn->Release();
+    }
+    if (cond) cond->Release();
+    bar->Release();
+    return cached;
+}
 
 wchar_t Glyph(DeviceKind k, bool bluetooth) {
     switch (k) {
@@ -321,7 +387,8 @@ bool Reposition() {
     RECT tr, bar;
     GetWindowRect(tray, &tr);
     GetWindowRect(g_taskbar, &bar);
-    POINT p{ tr.left, bar.top };
+    LONG weather = WidgetsButtonLeft(tr);
+    POINT p{ weather >= 0 ? weather : tr.left, bar.top };
     ScreenToClient(g_taskbar, &p);
     int left = p.x - g_size.cx - Px(2);
 
@@ -337,7 +404,10 @@ bool Reposition() {
 
     // Keep us above the taskbar's own content (our sibling windows).
     bool covered = GetWindow(g_wnd, GW_HWNDPREV) != nullptr;
-    if (!covered && EqualRect(&tr, &g_lastTray) && EqualRect(&bar, &g_lastBar) && g_lastW == g_size.cx) return true;
+    static int lastLeft = -1;
+    if (!covered && EqualRect(&tr, &g_lastTray) && EqualRect(&bar, &g_lastBar) && g_lastW == g_size.cx && lastLeft == left)
+        return true;
+    lastLeft = left;
     g_lastTray = tr;
     g_lastBar = bar;
     g_lastW = g_size.cx;
