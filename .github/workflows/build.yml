@@ -40,6 +40,10 @@ jobs:
           $version = if ($env:GITHUB_REF -like 'refs/tags/v*') { $env:GITHUB_REF_NAME.Substring(1) } else { '0.0.0' }
           ./installer/build-installer.ps1 -Version $version
 
+      - name: Stage standalone Windows x64 executable
+        shell: pwsh
+        run: Copy-Item WirelessBattery.exe dist/WirelessBattery-x64.exe -Force
+
       - name: Fetch HeadsetControl source (GPL corresponding source for the bundled binary)
         shell: pwsh
         run: |

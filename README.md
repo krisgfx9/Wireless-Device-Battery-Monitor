@@ -37,6 +37,7 @@ Hover for details. Click for the menu: every device (click one to hide or show i
 | **Glorious** | Model O / O- / D / D- Wireless, Model O 2 / D 2 PRO | Vendor feature report |
 | **Hitscan** | Hyperlight X, Hyperlight N | Vendor feature report (same protocol as Glorious) |
 | **Kysona / Pulsar / ATK (VXE) / Hitscan** | Kysona M600 / Mercury, Pulsar and ATK VXE wireless mice (e.g. VXE X3 Pro, ATK F1 Extreme), Hitscan Hyperlight | Shared vendor protocol with checksummed replies |
+| **VXE / ATK NearLink** | VXE R1 NK / ATK NK NANO (receiver `373B:1216`, wired mouse `373B:124C`) | 64-byte `FF05` battery query over USB-C or 2.4 GHz; wired device is preferred when both are connected |
 | **ATK headsets** | ATK N9 Pro | Virtual COM port protocol (the ATK desktop app must be closed) |
 | **G-Wolves** | Fenrir, Fenrir Pro / Max / Asym, HTX, HTS, HSK, HTR, HT-S2, Lycan, WARG, VUK and their 8K dongles | Glorious or Kysona protocol, depending on the model |
 | **Keychron mice** | M4 and other Keychron mice on the 2.4 GHz receiver; 8K mice (M5 8K, G6 HE 8K ...) on the TurboLink 8K receiver | Vendor report from Keychron Launcher |
