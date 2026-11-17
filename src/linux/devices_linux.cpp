@@ -10,8 +10,9 @@
 #include "../drivers/drivers.h"
 #include "../hid.h"
 
-std::vector<DeviceStatus> PollAllDevices() {
+std::vector<DeviceStatus> PollAllDevices(bool forceRefresh) {
     PollContext ctx;
+    ctx.forceRefresh = forceRefresh;
     ctx.colls = EnumHid();
 
     // Phase 1: famous vendors, HID only.

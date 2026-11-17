@@ -6,6 +6,7 @@
 #include <hidclass.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <map>
 #include <set>
@@ -40,6 +41,7 @@ const wchar_t* kSettingsKey = L"Software\\WirelessBattery";
 HINSTANCE g_inst;
 HWND g_hwnd;
 HANDLE g_refreshEvt, g_stopEvt, g_worker;
+std::atomic<bool> g_forceRefresh{ false };
 UINT g_taskbarCreatedMsg;
 bool g_lightTaskbar;
 bool g_wantWidget = true;      // user's choice: taskbar widget (default) or tray icons
@@ -518,7 +520,10 @@ void ShowMenu() {
     PostMessageW(g_hwnd, WM_NULL, 0, 0);
     DestroyMenu(m);
     switch (cmd) {
-        case ID_REFRESH: SetEvent(g_refreshEvt); break;
+        case ID_REFRESH:
+            g_forceRefresh.store(true);
+            SetEvent(g_refreshEvt);
+            break;
         case ID_AUTOSTART: SetAutostart(!AutostartEnabled()); break;
         case ID_HIDE_LAST_KNOWN: SetHideLastKnown(!g_hideLastKnown); break;
         case ID_WIDGET_BACKGROUND: SetWidgetBackground(!g_widgetBackground); break;
@@ -542,7 +547,8 @@ void ShowMenu() {
 
 DWORD WINAPI Worker(LPVOID) {
     for (;;) {
-        auto* v = new std::vector<DeviceStatus>(PollAllDevices());
+        // Consume on the worker: clicks during a poll remain pending for the next poll.
+        auto* v = new std::vector<DeviceStatus>(PollAllDevices(g_forceRefresh.exchange(false)));
         if (!PostMessageW(g_hwnd, WM_RESULTS, 0, (LPARAM)v)) delete v;
         HANDLE hs[2] = { g_stopEvt, g_refreshEvt };
         if (WaitForMultipleObjects(2, hs, FALSE, POLL_INTERVAL_MS) == WAIT_OBJECT_0) return 0;

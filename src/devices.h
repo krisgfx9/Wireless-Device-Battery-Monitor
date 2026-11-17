@@ -21,7 +21,8 @@ struct DeviceStatus {
 };
 
 // Queries every supported device. Blocking (can take a second or two); call from a worker thread.
-std::vector<DeviceStatus> PollAllDevices();
+// forceRefresh bypasses supported driver caches for an explicit user refresh.
+std::vector<DeviceStatus> PollAllDevices(bool forceRefresh = false);
 
 // Prints every HID collection (for adding support for new devices).
 std::wstring DumpHidCollections();

@@ -14,6 +14,7 @@ struct PollContext {
     std::set<std::pair<USHORT, USHORT>> claimed;
     std::set<std::wstring> btContainers;  // container ids PollBluetooth already reported
     std::vector<DeviceStatus> out;
+    bool forceRefresh = false;  // explicit user request; automatic polls keep driver caches
 
     bool IsClaimed(USHORT vid, USHORT pid) const { return claimed.count({ vid, pid }) != 0; }
     void Claim(USHORT vid, USHORT pid) { claimed.insert({ vid, pid }); }
@@ -75,6 +76,7 @@ void PollPulsar(PollContext& ctx);    // Pulsar X2 V3 / X2 V3 eS on 3710 (before
 void PollAtkBitmouse(PollContext& ctx);  // ATK / VXE NK NANO dongle 373B:1216 (before Kysona, same vendor id)
 void PollKysona(PollContext& ctx);    // also Pulsar, ATK / VXE, Hitscan Hyperlight
 void PollHyperX(PollContext& ctx);
+void PollLogitechG435Acb(PollContext& ctx);  // G435 046D:0ACB, cached to limit audio interruptions
 void PollLogitechG435(PollContext& ctx);  // G435 headset on the 046D:0ADF dongle (not HID++)
 void PollLogitech(PollContext& ctx);
 void PollRazer(PollContext& ctx);

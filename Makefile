@@ -25,6 +25,8 @@ clean:
 
 test:
 	@mkdir -p build
+	$(CXX) $(CXXFLAGS) tests/logitech_g435_0acb_test.cpp -o build/logitech_g435_0acb_test.exe
+	./build/logitech_g435_0acb_test.exe
 	$(CXX) $(CXXFLAGS) tests/steelseries_mouse_test.cpp src/drivers/steelseries.cpp -o build/steelseries_mouse_test.exe
 	./build/steelseries_mouse_test.exe
 	$(CXX) -std=c++17 -O2 -Wall tests/rapoo_protocol_test.cpp -o build/rapoo_protocol_test.exe

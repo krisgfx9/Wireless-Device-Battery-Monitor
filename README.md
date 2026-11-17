@@ -27,9 +27,17 @@ Hover for details. Click for the menu: every device (click one to hide or show i
 
 ## Supported devices
 
+Logitech G435 receivers `046D:0ACB` are also supported. This revision briefly interrupts
+audio and microphone while reading its battery through the Realtek bridge. Readings (including
+failed attempts) are cached for 15 minutes; **Refresh now** bypasses this cache and requests
+a fresh reading immediately, with the same brief audio/microphone interruption.
+Unplugging the receiver for at least one poll clears the cache. The percentage is estimated
+from voltage and can read high while charging; headset power changes may take 15 minutes to appear.
+The newer `046D:0ADF` driver keeps its existing polling behavior.
+
 | Vendor | Devices | How |
 |---|---|---|
-| **Logitech** | Mice and keyboards on Unifying, Bolt, Lightspeed (including the PRO X3 SUPERSTRIKE dongle `046D:C54F`) and Nano receivers, over USB or Bluetooth; G headsets (G533, G535, G633/G635/G733/G933/G935, G PRO/PRO X); G435 on the newer `046D:0ADF` dongle | HID++ 1.0 / 2.0 with feature discovery: unified battery, battery level, voltage, ADC; G435: CRC-16 framed vendor reports, `GET_BATTERY` in mV |
+| **Logitech** | Mice and keyboards on Unifying, Bolt, Lightspeed (including the PRO X3 SUPERSTRIKE dongle `046D:C54F`) and Nano receivers, over USB or Bluetooth; G headsets (G533, G535, G633/G635/G733/G933/G935, G PRO/PRO X); G435 on `046D:0ACB` and `046D:0ADF` dongles | HID++ 1.0 / 2.0 with feature discovery: unified battery, battery level, voltage, ADC; G435: Realtek bridge (`0ACB`) or CRC-16 framed reports (`0ADF`), `GET_BATTERY` in mV |
 | **Razer** | Wireless mice, keyboards and dongles; BlackShark V2 HyperSpeed, V2 Pro (2023), V3 / V3 Pro / V3 X headsets; Barracuda X (2022) on its 2.4 GHz receiver (`1532:0550`) | Razer feature-report protocol; BlackShark vendor protocols (V3 / V3 Pro / V3 X queried every 5 min); Barracuda X: Airoha battery and cable queries through the receiver |
 | **SteelSeries** | Arctis 1/7/7+/9/Pro/Pro Wireless, Arctis Nova 3P/5/7/7X/7P/Pro Wireless, GameBuds; Aerox 3/5/9 Wireless, Prime Wireless, Rival 3 Wireless (Gen 2), Rival 650, Rival Pro | Vendor HID reports |
 | **SteelSeries** | Arctis 1/7/7+/9/Pro/Pro Wireless, Arctis Nova 3P/5/7/7X/7P/Pro Wireless (including `1038:225D`), GameBuds; Aerox 3/5/9 Wireless, Prime Wireless, Rival 3 Wireless (Gen 2), Rival 650, Rival Pro | Vendor HID reports |

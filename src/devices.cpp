@@ -36,8 +36,9 @@ std::vector<std::pair<USHORT, USHORT>> IgnoredDevices() {
 
 }  // namespace
 
-std::vector<DeviceStatus> PollAllDevices() {
+std::vector<DeviceStatus> PollAllDevices(bool forceRefresh) {
     PollContext ctx;
+    ctx.forceRefresh = forceRefresh;
     ctx.colls = EnumHid();
     auto ignored = IgnoredDevices();
     if (!ignored.empty())
@@ -76,6 +77,7 @@ std::vector<DeviceStatus> PollAllDevices() {
     PollFantech(ctx);
     PollRazerHeadsets(ctx);  // before the generic Razer driver, which shares the vendor id
     PollHyperX(ctx);
+    PollLogitechG435Acb(ctx);
     PollLogitechG435(ctx);  // before the HID++ driver, which shares the vendor id
     PollLogitech(ctx);
     PollRazer(ctx);
