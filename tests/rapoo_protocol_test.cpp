@@ -56,6 +56,14 @@ int main() {
     assert(Rapoo::DecodeBattery(legacy.data(), legacy.size(), b, legacyProfile));
     assert(!b.charging); // a previous charging reading must not leak into this one
 
+    // VT1 Pro Max (24AE:1233 receiver / 24AE:4433 cable), USBPcap captures from issue #136.
+    const std::vector<std::uint8_t> vt1ProMaxReceiver = { 0xBB, 0xB0, 0x71, 0x84, 0x03, 0x01, 0x64 };
+    assert(Rapoo::DecodeBattery(vt1ProMaxReceiver.data(), vt1ProMaxReceiver.size(), b, legacyProfile));
+    assert(b.percent == 100 && !b.charging);
+    const std::vector<std::uint8_t> vt1ProMaxCable = { 0xBB, 0xB0, 0x71, 0x84, 0x03, 0x02, 0x5F };
+    assert(Rapoo::DecodeBattery(vt1ProMaxCable.data(), vt1ProMaxCable.size(), b, legacyProfile));
+    assert(b.percent == 95 && b.charging);
+
     for (std::size_t size = 0; size < 9; size++)
         assert(!Rapoo::DecodeBattery(captured.data(), size, b));
     for (std::size_t size = 0; size < 7; size++)

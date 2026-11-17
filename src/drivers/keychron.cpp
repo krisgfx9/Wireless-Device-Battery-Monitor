@@ -8,6 +8,12 @@
 // the same request, but on the receiver bit 6 of the first byte is set (41 00 81 01 ...). Their reply
 // [41][..][..][01][..][max rate][..]..[state][battery %][profile] has no vendor id; state 1 =
 // charging, 3 is treated as 0.
+// The 4K mice (M4 4K, M3 4K, M3 mini 4K, M6 4K ... on the Keychron 4K Link receiver, e.g. 3434:D038)
+// use the Launcher protocol "4k" on the FF0A:0001 collection. The Launcher tells it apart from
+// "8k_nordic" by the reply to 01 00 81 01: bytes 6/7 are 34 34 or 2D 36 on 8k_nordic, anything else
+// means "4k". The battery request is the same 41 00 81 01 (bit 6 = ask the mouse over the receiver),
+// but the reply is [41][..][..][01][..][state][battery %][profile]..[max rate]; state != 0 is shown
+// as charging. 40 00 81 00 returns the paired mouse's product id at bytes 4/5, used for its name.
 // The Nape Pro trackball (ZMK firmware) on the Link-KM receiver (3434:D026) uses neither: it is read
 // through the receiver's VIA-style raw HID collection FF60:0061 (unnumbered 32-byte reports). B2 asks
 // the receiver for its three slots (at bytes 2/7/12: vid BE16, pid BE16, status, 1 = connected) and
@@ -34,12 +40,12 @@ std::wstring CleanName(std::wstring n) {
 
 namespace {
 
-// Sends [cmd][00][81][01] and waits up to 600 ms for a reply starting with cmd whose byte 3 is 01.
-bool Query(HidDev& d, BYTE cmd, std::vector<BYTE>& r) {
+// Sends [cmd][00][81][sub] and waits up to 600 ms for a reply starting with cmd whose byte 3 is sub.
+bool Query(HidDev& d, BYTE cmd, std::vector<BYTE>& r, BYTE sub = 0x01) {
     std::vector<BYTE> payload(64, 0);
     payload[0] = cmd;
     payload[2] = 0x81;
-    payload[3] = 0x01;
+    payload[3] = sub;
     SetChecksum(payload);
     std::vector<BYTE> req(1, 0x00);  // report id 0 (unnumbered)
     req.insert(req.end(), payload.begin(), payload.end());
@@ -49,7 +55,7 @@ bool Query(HidDev& d, BYTE cmd, std::vector<BYTE>& r) {
     while ((LONGLONG)end - (LONGLONG)GetTickCount64() > 0) {
         int left = (int)((LONGLONG)end - (LONGLONG)GetTickCount64());
         if (d.Read(r, left) < 13) return false;
-        if (r[0] == cmd && r[3] == 0x01) return true;
+        if (r[0] == cmd && r[3] == sub) return true;
     }
     return false;
 }
@@ -109,6 +115,18 @@ void PollNape(PollContext& ctx) {
     }
 }
 
+// Product ids the 4K Link reports for its paired mouse (Launcher's productFirmware table).
+const wchar_t* Name4k(USHORT productId) {
+    switch (productId) {
+        case 0x0620: return L"Keychron M3 mini 4K";
+        case 0x0621: return L"Keychron M4 4K";
+        case 0x0622: return L"Keychron M3 mini 4K";
+        case 0x0624: return L"Keychron M6 4K";
+        case 0x07A0: return L"Keychron M3 4K";
+    }
+    return nullptr;
+}
+
 }  // namespace
 
 void PollKeychron(PollContext& ctx) {
@@ -121,7 +139,26 @@ void PollKeychron(PollContext& ctx) {
             int percent = -1;
             bool charging = false, wireless = true;
             bool got1 = Query(d, 0x01, r1);
-            if (got1 && (USHORT)(r1[6] | (r1[7] << 8)) == 0x3434 && r1[11] <= 100) {
+            USHORT tag = got1 ? (USHORT)(r1[6] | (r1[7] << 8)) : 0;
+            if (got1 && c->page() == 0xFF0A && c->usage() == 0x01 && tag != 0x3434 && tag != 0x362D) {
+                // 4K mouse on the 4K Link receiver (Launcher protocol "4k"); the 8K layout does not apply.
+                if (!Query(d, 0x41, r) || r[6] < 1 || r[6] > 100) continue;
+                DeviceStatus s;
+                s.key = L"keychron:" + Hex4(pid);
+                s.name = CleanName(HidProduct(*c));
+                std::vector<BYTE> st;
+                if (Query(d, 0x40, st, 0x00)) {
+                    const wchar_t* n = Name4k((USHORT)(st[4] | (st[5] << 8)));
+                    if (n) s.name = n;
+                }
+                s.kind = DeviceKind::Mouse;
+                s.via = L"2.4 GHz receiver";
+                s.percent = r[6];
+                s.charging = r[5] != 0;
+                ctx.Add(s, vid, pid);
+                break;
+            }
+            if (got1 && tag == 0x3434 && r1[11] <= 100) {
                 percent = r1[11];  // M4 and other mice on the classic protocol: the reply carries the vendor id
                 charging = r1[10] != 0;
             } else if (Query(d, 0x41, r) && r[10] <= 3 && r[11] <= 100) {

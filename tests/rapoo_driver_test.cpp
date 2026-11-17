@@ -35,7 +35,7 @@ bool HidDev::Open(const HidColl& c) {
 }
 void HidDev::Close() { h_ = INVALID_HANDLE_VALUE; }
 int HidDev::Read(std::vector<BYTE>& out, int timeoutMs) {
-    assert(timeoutMs > 0 && timeoutMs <= 4000);
+    assert(timeoutMs > 0 && timeoutMs <= 5000);
     auto& queue = reports[c_.path];
     if (queue.empty()) return -1;
     out = queue.front();
@@ -99,6 +99,21 @@ int main() {
     PollRapoo(ctx);
     assert(ctx.out.size() == 1 && ctx.out[0].charging && ctx.out[0].percent == 37);
     assert(ctx.out[0].via == L"USB cable");
+
+    // VT1 Pro Max uses the same BB report (issue #136 captures).
+    ctx = {};
+    ctx.colls = { Collection(0x1233, L"vt1pm", 7) };
+    reports = { { L"vt1pm", { { 0xBB, 0xB0, 0x71, 0x84, 3, 1, 0x64 } } } };
+    PollRapoo(ctx);
+    assert(ctx.out.size() == 1 && ctx.out[0].key == L"rapoo:4433");
+    assert(ctx.out[0].name == L"Rapoo VT1 Pro Max" && ctx.out[0].percent == 100);
+    assert(!ctx.out[0].charging && ctx.out[0].via == L"2.4 GHz receiver");
+    ctx = {};
+    ctx.colls = { Collection(0x4433, L"vt1pm-cable", 7) };
+    reports = { { L"vt1pm-cable", { { 0xBB, 0xB0, 0x71, 0x84, 3, 2, 0x5F } } } };
+    PollRapoo(ctx);
+    assert(ctx.out.size() == 1 && ctx.out[0].key == L"rapoo:4433");
+    assert(ctx.out[0].charging && ctx.out[0].percent == 95 && ctx.out[0].via == L"USB cable");
 
     // The same marker does not select legacy semantics on a modern Nordic collection.
     ctx = {};

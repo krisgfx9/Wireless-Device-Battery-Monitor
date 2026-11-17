@@ -1,6 +1,7 @@
 // HyperX wireless headsets (HP VID 03F0, older Kingston VID 0951).
 // Protocols: Cloud III Wireless verified on hardware (03F0:0C9D) and github.com/Medprj/HyperXWM;
-// the others follow github.com/Sapd/HeadsetControl.
+// Cloud III S from github.com/LennardKittner/HyperHeadset; Cloud Stinger Core from
+// github.com/davidsantanaalves/HyperBatteryMonitor; the others follow github.com/Sapd/HeadsetControl.
 #include "drivers.h"
 
 #include <cmath>
@@ -158,6 +159,52 @@ bool Cloud3S(const HidColl& c, DeviceStatus& s) {
     return true;
 }
 
+// Cloud Stinger Core Wireless (+ 7.1): feature report FF on the FF00:0001 collection (MI_03 Col03).
+// From github.com/davidsantanaalves/HyperBatteryMonitor (Devices/CloudStingerCoreWirelessDevice.cs, MIT);
+// the PlayStation receiver 03F0:0A93 was verified on hardware there (PR #6: 52 queries, codes 03/05/06).
+// SetFeature(command), wait 20 ms, GetFeature(FF):
+//   connection: reply [11] == 1 means the headset is on.
+//   battery:    reply [9] = 03 discharging / 05 charging / 06 full, [11..12] = battery mV (little endian).
+// The 0A93 receiver can first hand back the previous report (FF 01 00 ...); its battery reply is FF 12 05,
+// so on that receiver the reply is read again (up to 10 x 20 ms) until it looks right.
+bool StingerCore(const HidColl& c, DeviceStatus& s) {
+    static const std::vector<BYTE> kConnection = { 0xFF, 0x07, 0x00, 0xFD, 0x04, 0x00, 0x00, 0x02, 0x82, 0x03,
+                                                   0x05, 0x29, 0x0F, 0x00, 0x00, 0x03, 0x68, 0x10, 0x00, 0x00 };
+    static const std::vector<BYTE> kBattery = { 0xFF, 0x07, 0x00, 0xFD, 0x04, 0x0C, 0xF1, 0x02, 0x01, 0x04, 0xF0, 0x0C };
+    // mV -> % in 10% steps, from the same source (separate curves while charging and on battery).
+    static const int kPct[] = { 100, 90, 80, 70, 60, 50, 40, 30, 20, 10, 0 };
+    static const int kChargingMv[] = { 4130, 4090, 4050, 4000, 3967, 3946, 3930, 3916, 3871, 3831, 3400 };
+    static const int kDischargingMv[] = { 4121, 4042, 3954, 3905, 3838, 3785, 3763, 3738, 3700, 3651, 3517 };
+
+    HidDev d;
+    if (!d.Open(c)) return false;
+    const bool ps = c.pid == 0x0A93;
+    auto exchange = [&](const std::vector<BYTE>& cmd, std::vector<BYTE>& r, bool (*good)(const std::vector<BYTE>&)) {
+        if (!d.SetFeature(cmd)) return false;
+        for (int i = 0; i < (ps ? 10 : 1); i++) {
+            Sleep(20);
+            if (!d.GetFeature(0xFF, r) || r.size() < 13) return false;
+            if (!ps || good(r)) return true;
+        }
+        return false;
+    };
+    auto fresh = [](const std::vector<BYTE>& r) { return !(r[1] == 0x01 && r[2] == 0x00); };
+    auto battery = [](const std::vector<BYTE>& r) { return r[0] == 0xFF && r[1] == 0x12 && r[2] == 0x05; };
+
+    std::vector<BYTE> r;
+    // The connection reply's header isn't documented, so after 10 stale-looking reads the last one is used.
+    if (!exchange(kConnection, r, fresh) && !(ps && r.size() >= 13 && !fresh(r))) return false;
+    s = Base(c.pid, L"HyperX Cloud Stinger Core Wireless");
+    s.connected = r[11] == 0x01;
+    if (!s.connected || !exchange(kBattery, r, battery)) return true;
+    BYTE code = r[9];
+    if (code != 0x03 && code != 0x05 && code != 0x06) return true;
+    s.millivolts = r[11] | (r[12] << 8);
+    s.charging = code == 0x05;
+    s.percent = code == 0x06 ? 100 : Interpolate(s.millivolts, code == 0x05 ? kChargingMv : kDischargingMv, kPct, 11);
+    return true;
+}
+
 struct Model {
     USHORT vid;
     std::vector<USHORT> pids;
@@ -178,6 +225,9 @@ const Model kModels[] = {
     { 0x03F0, { 0x08BE }, [](const HidColl& c) { return c.page() == 0xFF13 && c.usage() == 0xFF00; }, CloudAlpha2 },
     { 0x0951, { 0x16C4, 0x1723, 0x1749 }, [](const HidColl& c) { return c.page() >= 0xFF00 && c.outLen() >= 3; }, CloudFlight },
     { 0x03F0, { 0x0E90 }, [](const HidColl& c) { return c.page() >= 0xFF00 && c.outLen() >= 3; }, CloudFlight },  // Cloud Flight (HP)
+    // Cloud Stinger Core Wireless: PlayStation receiver (HP) and the original Kingston receiver.
+    { 0x03F0, { 0x0A93 }, [](const HidColl& c) { return c.page() == 0xFF00 && c.usage() == 0x0001 && c.featLen() >= 32; }, StingerCore },
+    { 0x0951, { 0x170B }, [](const HidColl& c) { return c.page() == 0xFF00 && c.usage() == 0x0001 && c.featLen() >= 32; }, StingerCore },
 };
 
 }  // namespace

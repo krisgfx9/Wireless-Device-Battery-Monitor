@@ -1,3 +1,7 @@
+// The Windows HID backend. Linux uses hid_linux.cpp instead; this file is compiled only when
+// _WIN32 is defined so the existing Windows behaviour is byte-for-byte unchanged.
+#ifdef _WIN32
+
 #include "hid.h"
 
 #include <setupapi.h>
@@ -158,13 +162,11 @@ bool HidDev::GetFeature(BYTE reportId, std::vector<BYTE>& out) {
     return HidD_GetFeature(h_, out.data(), (ULONG)out.size()) != FALSE;
 }
 
-bool HidDev::GetInputReport(BYTE reportId, std::vector<BYTE>& out, USHORT length) {
-    if (!ok()) return false;
-    if (!length) length = c_.inLen();
-    if (length < 2) return false;
-    out.assign(length, 0);
+bool HidDev::GetInputReport(BYTE reportId, std::vector<BYTE>& out) {
+    if (!ok() || !c_.inLen()) return false;
+    out.assign(c_.inLen(), 0);
     out[0] = reportId;
-    return HidD_GetInputReport(h_, out.data(), length) != FALSE;
+    return HidD_GetInputReport(h_, out.data(), (ULONG)out.size()) != FALSE;
 }
 
 // ---- helpers ----------------------------------------------------------------------------------
@@ -231,3 +233,5 @@ DeviceKind KindFromCollections(const std::vector<HidColl>& all, USHORT vid, USHO
     if (kbd) return DeviceKind::Keyboard;
     return DeviceKind::Other;
 }
+
+#endif  // _WIN32

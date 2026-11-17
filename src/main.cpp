@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "devices.h"
+#include "drivers/drivers.h"
 #include "widget.h"
 
 namespace {

@@ -82,7 +82,20 @@ For this legacy format, states 1/2 mean discharging/charging. A charging percent
 unknown and is preserved as unknown. Transition state 0, unrelated `BC` reports, malformed packets,
 and percentages above 100 are ignored. Legacy support has automated coverage, but has not been
 verified with a physical legacy mouse here. This interpretation is restricted to product IDs
-`1215/4415` and their 7-byte input collection. The Nordic profile never interprets `BB` packets.
+`1215/4415` (VT3 Pro), `1233/4433` (VT1 Pro Max) and their 7-byte input collection.
+
+The VT1 Pro Max (receiver `24AE:1233`, cable `24AE:4433`, mouse firmware 222, dongle firmware 213)
+was added from USBPcap captures its owner attached to issue #136. The `--dump` output lists the
+7-byte `FF00:0002` collection on interface 1, and the captures show it pushing, with no request
+from the Rapoo app:
+
+```text
+BB B0 71 84 03 01 64   receiver, every ~3.2 s; Rapoo app showed 100%
+BB B0 71 84 03 02 5F   cable, charging, 95%; Rapoo app showed "Charging"
+```
+
+On the cable the report was seen only once in a 16-second capture, so a cable-only reading may
+time out on some refreshes; the receiver pushes it regularly. The Nordic profile never interprets `BB` packets.
 
 This does **not** establish support for every Rapoo device. CH584 models such as VT1 SE and VT7 SE
 use report `08` in the official driver and are not supported by this decoder. Other Telink revisions use a different
@@ -124,6 +137,7 @@ the Makefile discovers it automatically. MinGW itself was not installed in the t
   Minified names may change on future releases.
 - [Device-Battery-Info: RapooProtocol.cs](https://github.com/PyFlat/Device-Battery-Info/blob/4553297903ecfb20e55116014b8ec437deaf640d/src/DeviceBatteryInfo/Sources/Rapoo/RapooProtocol.cs),
   for legacy VT3 Pro reports, charging state and the unknown-level sentinel.
+- Issue #136 USBPcap captures (VT1 Pro Max on receiver and on cable while charging).
 - [ClickSync: protocol_api_rapoo.js](https://github.com/Nuitfanee/ClickSync/blob/3a945428b25bf6b2db0e8750f819666caff9cda5/src/protocols/protocol_api_rapoo.js)
   independently corroborates passive `07` status broadcasts and the battery offset. Its parser
   clamps invalid percentages; this implementation rejects them instead.
