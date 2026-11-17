@@ -16,9 +16,18 @@
 
 namespace {
 
-const USHORT kVid = 0x5253;
+// MCHOSE ships two controller MCUs that answer this same protocol: the original one reports
+// VID 5253 (L7 / M7 / A7 / K7 families) and the RealTek-based one reports 3837 (A7 V2 Ultra+
+// 3837:100B). Both are polled; the reply's own VID is checked against this list.
+const USHORT kVids[] = { 0x5253, 0x3837 };
 const BYTE kReport = 0x12;
 const BYTE kCmdStatus = 0x06;
+
+bool KnownVid(USHORT v) {
+    for (USHORT k : kVids)
+        if (k == v) return true;
+    return false;
+}
 
 // Returns 1 for a status reply, 0 for a valid echo with an empty payload (mouse asleep), -1 otherwise.
 int ParseStatus(const std::vector<BYTE>& r, int& level, int& charging, int& flags) {
@@ -29,7 +38,7 @@ int ParseStatus(const std::vector<BYTE>& r, int& level, int& charging, int& flag
     for (BYTE b : p)
         if (b) allZero = false;
     if (allZero) return 0;
-    if ((p[0] | (p[1] << 8)) != kVid) return -1;
+    if (!KnownVid((USHORT)(p[0] | (p[1] << 8)))) return -1;
     level = p[9];
     charging = p[10];
     flags = p[8];
@@ -39,7 +48,8 @@ int ParseStatus(const std::vector<BYTE>& r, int& level, int& charging, int& flag
 }  // namespace
 
 void PollMchose(PollContext& ctx) {
-    for (auto [vid, pid] : ctx.Products(kVid)) {
+    for (USHORT devVid : kVids)
+    for (auto [vid, pid] : ctx.Products(devVid)) {
         for (const HidColl* c : ctx.Find(vid, pid, [](const HidColl& c) { return c.page() == 0xFF01 && c.usage() == 0x0001 && c.featLen() >= 65; })) {
             HidDev d;
             if (!d.OpenFeatureOnly(*c)) continue;
