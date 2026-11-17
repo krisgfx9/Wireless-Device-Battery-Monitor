@@ -18,6 +18,7 @@ Battery levels of your wireless mouse, headset, keyboard and controller, right o
 - **Low battery:** a red number means 15% or less.
 - **Charging:** a blue ⚡ appears next to the number.
 - **Asleep:** dimmed text means the device is asleep and the last known value is shown.
+- **Placement:** it steps aside for other apps' taskbar widgets instead of covering them. Choose right or left of the Windows app icons in the menu, or click and hold the widget and drag it to another free spot (Windows 11).
 - **Theme:** it follows light/dark mode and DPI scaling.
 
 **Tray icons:** one icon per device with the number drawn in it, plus a "Low battery" notification at 15%. The app switches to this automatically when the taskbar is vertical or can't be found.
@@ -114,7 +115,7 @@ just lose the extra headsets.
 
 Each vendor driver in [`src/drivers/`](src/drivers) recognises its devices by USB vendor and product ID, and only ever sends read-only battery queries. Unknown devices are never written to. The generic fallbacks (HID battery usage, Bluetooth, XInput, HeadsetControl) only look at devices no vendor driver has claimed.
 
-The taskbar widget is a layered child window of `Shell_TrayWnd`, placed left of `TrayNotifyWnd`. If Explorer restarts, it is re-created.
+The taskbar widget is a layered child window of `Shell_TrayWnd`, placed left of `TrayNotifyWnd` (or of the app icons, measured with UI Automation on a background thread), skipping past other apps' child windows of the taskbar. If Explorer restarts, it is re-created.
 
 ## Credits
 

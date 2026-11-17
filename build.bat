@@ -11,5 +11,5 @@ g++ -std=c++17 -Os -municode -mwindows -static -s -ffunction-sections -fdata-sec
     src\drivers\steelseries.cpp src\drivers\corsair.cpp src\drivers\coolermaster.cpp src\drivers\playstation.cpp src\drivers\gamesir.cpp src\drivers\xinput.cpp src\drivers\rapoo.cpp ^
     src\drivers\generic.cpp src\drivers\headsetcontrol.cpp ^
     build\app_res.o -o WirelessBattery.exe ^
-    -lhid -lsetupapi -lcfgmgr32 -lole32 -lcomctl32 -lgdi32 -lruntimeobject || exit /b 1
+    -lhid -lsetupapi -lcfgmgr32 -lole32 -loleaut32 -lcomctl32 -lgdi32 -ldwmapi -lruntimeobject || exit /b 1
 echo Built WirelessBattery.exe
