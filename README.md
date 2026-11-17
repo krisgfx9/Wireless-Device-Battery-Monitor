@@ -175,7 +175,7 @@ the remaining vendors are planned follow-up phases.
 
 ## Limitations
 
-- **Primary monitor only:** the taskbar widget sits on the primary monitor's taskbar.
+- **Other monitors:** with *Show my taskbar on all displays* on, the widget also appears on each secondary taskbar, just left of its clock (turn it off with *Also show on other monitors' taskbars* in the menu). When the full layout does not fit between the app buttons and the clock (e.g. a portrait monitor), it uses a compact one (no `%`, tighter spacing); if even that does not fit, it hides on that taskbar rather than cover app buttons. Vertical secondary taskbars are skipped.
 - **Crowded taskbars:** with a very full centered Windows 11 taskbar, the app buttons can reach the widget. On Windows 10 the task-button area is narrowed automatically.
 - **Phones:** read from a file Phone Link writes for the Start menu companion card, which is not a documented API and may change with Phone Link updates. The phone shows while Phone Link reports it as connected; a card older than 3 hours is shown dimmed. Charging state is not available there.
 - **Sleeping devices:** a device that is asleep may not answer. Its last value stays visible, dimmed. Logitech receivers drop sleeping devices from the link, so their last value is kept for 30 minutes.
