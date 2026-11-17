@@ -1,4 +1,4 @@
-// HyperX wireless headsets (HP VID 03F0, older Kingston VID 0951).
+// HyperX wireless headsets and Pulsefire mice (HP VID 03F0, older Kingston VID 0951).
 // Protocols: Cloud III Wireless verified on hardware (03F0:0C9D) and github.com/Medprj/HyperXWM;
 // Cloud III S from github.com/LennardKittner/HyperHeadset; Cloud Stinger Core from
 // github.com/davidsantanaalves/HyperBatteryMonitor; the others follow github.com/Sapd/HeadsetControl.
@@ -159,6 +159,25 @@ bool Cloud3S(const HidColl& c, DeviceStatus& s) {
     return true;
 }
 
+// Pulsefire Haste 2 Wireless: vendor report 50 02; reply 51 02 with battery percentage at [2].
+// Reverse-engineered and verified on hardware by a contributor; NGENUITY reports the same percentage.
+bool PulsefireHaste2(const HidColl& c, DeviceStatus& s) {
+    HidDev d;
+    if (!d.Open(c)) return false;
+    std::vector<BYTE> r;
+    if (!Query(d, { 0x50, 0x02 }, r, 1000,
+               [](const std::vector<BYTE>& r) { return r.size() >= 3 && r[0] == 0x51 && r[1] == 0x02; }))
+        return false;
+    if (r[2] > 100) return false;
+
+    s.key = L"hyperx:" + Hex4(c.pid);
+    s.name = L"HyperX Pulsefire Haste 2 Wireless";
+    s.kind = DeviceKind::Mouse;
+    s.via = L"2.4 GHz receiver";
+    s.percent = r[2];
+    return true;
+}
+
 // Cloud Stinger Core Wireless (+ 7.1): feature report FF on the FF00:0001 collection (MI_03 Col03).
 // From github.com/davidsantanaalves/HyperBatteryMonitor (Devices/CloudStingerCoreWirelessDevice.cs, MIT);
 // the PlayStation receiver 03F0:0A93 was verified on hardware there (PR #6: 52 queries, codes 03/05/06).
@@ -213,6 +232,11 @@ struct Model {
 };
 
 const Model kModels[] = {
+    // Pulsefire Haste 2 Wireless: dedicated vendor collection on MI_02 (64-byte reports).
+    { 0x03F0, { 0x0F98 }, [](const HidColl& c) {
+        return c.iface == 2 && c.page() == 0xFF00 && c.usage() == 0x0001 &&
+               c.inLen() == 64 && c.outLen() == 64 && c.featLen() == 64;
+    }, PulsefireHaste2 },
     { 0x03F0, { 0x05B7, 0x0C9D }, [](const HidColl& c) { return c.outLen() == 62 && c.inLen() == 62; }, Cloud3 },
     // Cloud II Core Wireless: same 66 <cmd> protocol as Cloud III Wireless, 64-byte reports (HyperHeadset).
     { 0x03F0, { 0x069F, 0x0995 }, [](const HidColl& c) { return c.page() >= 0xFF00 && c.outLen() >= 62 && c.inLen() >= 62; }, Cloud3 },
