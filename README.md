@@ -1,8 +1,8 @@
-**# Wireless Battery**
+# Wireless Battery
 
 
 
-**## TL;DR  - Added Hyperx PulseFire Haste 2 mouse**
+## TL;DR  - Added Hyperx PulseFire Haste 2 mouse
 
 
 
