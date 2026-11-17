@@ -4,15 +4,21 @@
 #include <dbt.h>
 #include <initguid.h>
 #include <hidclass.h>
+#include <bthdef.h>
+#include <bluetoothapis.h>
 
 #include <algorithm>
 #include <climits>
+#include <cstddef>
 #include <cstdio>
+#include <cstring>
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "bluetooth_refresh.h"
 #include "devices.h"
 #include "report.h"
 #include "widget.h"
@@ -44,6 +50,10 @@ const wchar_t* kSettingsKey = L"Software\\WirelessBattery";
 HINSTANCE g_inst;
 HWND g_hwnd;
 HANDLE g_refreshEvt, g_stopEvt, g_worker;
+std::map<HDEVNOTIFY, HANDLE> g_bluetoothRadios;
+SRWLOCK g_bluetoothChangesLock = SRWLOCK_INIT;
+std::vector<std::pair<BTH_ADDR, bool>> g_bluetoothChanges;
+std::map<BTH_ADDR, ULONGLONG> g_acceptBluetoothScanAfter;
 UINT g_taskbarCreatedMsg;
 bool g_lightTaskbar;
 bool g_wantWidget = true;      // user's choice: taskbar widget (default) or tray icons
@@ -143,7 +153,12 @@ void SaveOrder() {
 }
 
 bool IsEntryHidden(const TrayEntry& e) {
-    return IsHidden(e.st.key) || (g_hideLastKnown && (e.st.asleep || (e.st.percent < 0 && e.lastPct >= 0)));
+    return IsHidden(e.st.key) ||
+           (g_hideLastKnown && !BluetoothBatteryPending(e.st) && (e.st.asleep || (e.st.percent < 0 && e.lastPct >= 0)));
+}
+
+int DisplayedPercent(const TrayEntry& e) {
+    return e.st.percent >= 0 || BluetoothBatteryPending(e.st) ? e.st.percent : e.lastPct;
 }
 
 bool LoadBoolSetting(const wchar_t* name, bool defaultVal) {
@@ -298,14 +313,14 @@ HICON RenderIcon(const std::wstring& text, int barPct, Rgb textColor, Rgb barCol
 
 Rgb Foreground() { return g_lightTaskbar ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 }; }
 
-HICON IconFor(int pct, bool charging, bool dim) {
+HICON IconFor(int pct, bool charging, bool dim, bool pending) {
     Rgb fg = Foreground();
     Rgb bar = charging        ? Rgb{ 0, 170, 255 }
             : pct <= LOW_BATTERY ? Rgb{ 232, 32, 48 }
             : pct <= 30       ? Rgb{ 255, 150, 0 }
                               : Rgb{ 30, 190, 90 };
     Rgb text = (!charging && pct >= 0 && pct <= LOW_BATTERY) ? Rgb{ 240, 50, 60 } : fg;
-    std::wstring t = pct < 0 ? L"?" : std::to_wstring(pct);
+    std::wstring t = pct >= 0 ? std::to_wstring(pct) : pending ? L"??" : L"?";
     return RenderIcon(t, pct, text, bar, dim);
 }
 
@@ -319,6 +334,7 @@ void CopyTip(wchar_t* dst, size_t cap, const std::wstring& s) {
 std::wstring StatusText(const TrayEntry& e) {
     const auto& s = e.st;
     if (!s.connected) return L"off / not connected";
+    if (BluetoothBatteryPending(s)) return L"??";
     std::wstring t;
     if (!s.levelText.empty() && s.percent >= 0) t = s.levelText;
     else if (s.percent >= 0) t = std::to_wstring(s.percent) + L"%";
@@ -383,12 +399,14 @@ void ApplyEntry(TrayEntry& e) {
         if (e.added) { TrayDelete(e.uid); e.added = false; }
         return;
     }
-    int shown = s.percent >= 0 ? s.percent : e.lastPct;
-    bool dim = s.percent < 0;
-    std::wstring sig = std::to_wstring(shown) + (s.charging ? L"c" : L"") + (dim ? L"d" : L"") + (g_lightTaskbar ? L"l" : L"k");
+    const bool pending = BluetoothBatteryPending(s);
+    int shown = DisplayedPercent(e);
+    bool dim = s.percent < 0 && !pending;
+    std::wstring sig = std::to_wstring(shown) + (s.charging ? L"c" : L"") + (pending ? L"?" : dim ? L"d" : L"") +
+                       (g_lightTaskbar ? L"l" : L"k");
     if (sig != e.iconSig || !e.icon) {
         if (e.icon) DestroyIcon(e.icon);
-        e.icon = IconFor(shown, s.charging, dim);
+        e.icon = IconFor(shown, s.charging, dim, pending);
         e.iconSig = sig;
     }
     std::wstring tip = s.name + L"\n" + StatusText(e);
@@ -446,10 +464,12 @@ void UpdateWidget() {
     for (auto* e : list) {
         WidgetItem it;
         it.kind = e->st.kind;
-        it.percent = e->st.percent >= 0 ? e->st.percent : e->lastPct;
-        if (e->st.percent >= 0) it.text = e->st.levelText;
+        const bool pending = BluetoothBatteryPending(e->st);
+        it.percent = DisplayedPercent(*e);
+        if (pending) it.text = L"??";
+        else if (e->st.percent >= 0) it.text = e->st.levelText;
         it.charging = e->st.charging;
-        it.dim = e->st.percent < 0;
+        it.dim = e->st.percent < 0 && !pending;
         it.low = !it.charging && it.percent >= 0 && it.percent <= LOW_BATTERY;
         it.bluetooth = e->st.via == L"Bluetooth";
         items.push_back(it);
@@ -460,9 +480,19 @@ void UpdateWidget() {
     widget::SetItems(items, tip);
 }
 
-void OnResults(std::vector<DeviceStatus>& results) {
+struct PollResult {
+    ULONGLONG started;
+    std::vector<DeviceStatus> devices;
+};
+
+void OnResults(const PollResult& result) {
+    for (auto it = g_acceptBluetoothScanAfter.begin(); it != g_acceptBluetoothScanAfter.end();) {
+        if (result.started >= it->second) it = g_acceptBluetoothScanAfter.erase(it);
+        else ++it;
+    }
     std::map<std::wstring, bool> seen;
-    for (auto& s : results) {
+    for (const auto& s : result.devices) {
+        if (s.bluetoothAddress && g_acceptBluetoothScanAfter.count(s.bluetoothAddress)) continue;
         auto& e = g_entries[s.key];
         if (!e.uid) e.uid = StableId(s.key);
         e.st = s;
@@ -665,15 +695,116 @@ void ShowMenu() {
 // ---- worker thread ----------------------------------------------------------------------------
 
 DWORD WINAPI Worker(LPVOID) {
+    BluetoothRefresh bluetooth;
+    std::vector<std::pair<BTH_ADDR, bool>> changes;
     for (;;) {
-        auto* v = new std::vector<DeviceStatus>(PollAllDevices());
-        if (!PostMessageW(g_hwnd, WM_RESULTS, 0, (LPARAM)v)) delete v;
+        AcquireSRWLockExclusive(&g_bluetoothChangesLock);
+        changes.swap(g_bluetoothChanges);
+        ReleaseSRWLockExclusive(&g_bluetoothChangesLock);
+        const auto started = GetTickCount64();
+        for (const auto& [address, connected] : changes) bluetooth.ConnectionChanged(address, connected, started);
+        changes.clear();
+
+        auto* result = new PollResult{ started, PollAllDevices() };
+        const DWORD wait = bluetooth.NextWait(result->devices, started, GetTickCount64(), POLL_INTERVAL_MS);
+        if (!PostMessageW(g_hwnd, WM_RESULTS, 0, (LPARAM)result)) delete result;
         HANDLE hs[2] = { g_stopEvt, g_refreshEvt };
-        if (WaitForMultipleObjects(2, hs, FALSE, POLL_INTERVAL_MS) == WAIT_OBJECT_0) return 0;
+        if (WaitForMultipleObjects(2, hs, FALSE, wait) == WAIT_OBJECT_0) return 0;
     }
 }
 
 void RefreshSoon(UINT ms) { SetTimer(g_hwnd, TIMER_DEBOUNCE, ms, nullptr); }
+
+void UnregisterBluetoothRadios() {
+    for (const auto& [notification, radio] : g_bluetoothRadios) {
+        UnregisterDeviceNotification(notification);
+        if (radio) CloseHandle(radio);
+    }
+    g_bluetoothRadios.clear();
+}
+
+void RegisterBluetoothRadios() {
+    UnregisterBluetoothRadios();
+    BLUETOOTH_FIND_RADIO_PARAMS params{ sizeof(params) };
+    HANDLE radio;
+    HBLUETOOTH_RADIO_FIND radios = BluetoothFindFirstRadio(&params, &radio);
+    if (!radios) return;  // the minute scan still works without a radio notification
+    do {
+        DEV_BROADCAST_HANDLE filter{};
+        filter.dbch_size = sizeof(filter);
+        filter.dbch_devicetype = DBT_DEVTYP_HANDLE;
+        filter.dbch_handle = radio;
+        auto notification = RegisterDeviceNotificationW(g_hwnd, &filter, DEVICE_NOTIFY_WINDOW_HANDLE);
+        if (notification) g_bluetoothRadios.emplace(notification, radio);
+        else CloseHandle(radio);
+    } while (BluetoothFindNextRadio(radios, &radio));
+    BluetoothFindRadioClose(radios);
+}
+
+void OnBluetoothDeviceChange(WPARAM event, LPARAM data) {
+    if (!data) return;
+    const auto* header = reinterpret_cast<const DEV_BROADCAST_HDR*>(data);
+    if (header->dbch_devicetype == DBT_DEVTYP_DEVICEINTERFACE &&
+        (event == DBT_DEVICEARRIVAL || event == DBT_DEVICEREMOVECOMPLETE) &&
+        header->dbch_size >= offsetof(DEV_BROADCAST_DEVICEINTERFACE_W, dbcc_name)) {
+        const auto* device = reinterpret_cast<const DEV_BROADCAST_DEVICEINTERFACE_W*>(data);
+        if (IsEqualGUID(device->dbcc_classguid, GUID_BTHPORT_DEVICE_INTERFACE)) RegisterBluetoothRadios();
+        return;
+    }
+    if (header->dbch_devicetype != DBT_DEVTYP_HANDLE ||
+        header->dbch_size < offsetof(DEV_BROADCAST_HANDLE, dbch_eventguid)) return;
+    const auto* change = reinterpret_cast<const DEV_BROADCAST_HANDLE*>(data);
+    auto radio = g_bluetoothRadios.find(change->dbch_hdevnotify);
+    if (radio == g_bluetoothRadios.end()) return;
+    if (event == DBT_DEVICEQUERYREMOVE || event == DBT_DEVICEREMOVEPENDING || event == DBT_DEVICEREMOVECOMPLETE) {
+        if (radio->second) CloseHandle(radio->second);
+        radio->second = nullptr;
+        if (event == DBT_DEVICEREMOVECOMPLETE) {
+            UnregisterDeviceNotification(radio->first);
+            g_bluetoothRadios.erase(radio);
+        }
+        return;
+    }
+    if (event == DBT_DEVICEQUERYREMOVEFAILED) {
+        RegisterBluetoothRadios();
+        return;
+    }
+    constexpr size_t size = offsetof(BTH_RADIO_IN_RANGE, previousDeviceFlags) + sizeof(ULONG);
+    if (event != DBT_CUSTOMEVENT || !radio->second ||
+        change->dbch_size < offsetof(DEV_BROADCAST_HANDLE, dbch_data) + size ||
+        !IsEqualGUID(change->dbch_eventguid, GUID_BLUETOOTH_RADIO_IN_RANGE)) return;
+
+    BTH_RADIO_IN_RANGE remote{};
+    std::memcpy(&remote, change->dbch_data, size);
+    const auto& device = remote.deviceInfo;
+    constexpr ULONG connectedFlags = BDIF_CONNECTED | BDIF_LE_CONNECTED;
+    const ULONG links = device.flags & connectedFlags;
+    const ULONG previousLinks = remote.previousDeviceFlags & connectedFlags;
+    // Audio can connect over Bluetooth Classic while the headset already has a BLE link.
+    const bool connected = (links & ~previousLinks) != 0;
+    const bool disconnected = links == 0 && previousLinks != 0;
+    if ((!connected && !disconnected) || !(device.flags & BDIF_ADDRESS) || !device.address ||
+        ((device.flags & BDIF_COD) && GET_COD_MAJOR(device.classOfDevice) != COD_MAJOR_AUDIO)) return;
+    // Drop scans from before the event and give Windows time to clear its cached connection state.
+    g_acceptBluetoothScanAfter[device.address] = GetTickCount64() + (disconnected ? kBluetoothLastRetryMs : 0);
+    if (disconnected) {
+        bool removed = false;
+        for (auto& [key, entry] : g_entries) {
+            if (entry.st.bluetoothAddress != device.address || !entry.st.connected) continue;
+            entry.st.connected = false;
+            ApplyEntry(entry);
+            removed = true;
+        }
+        if (removed) {
+            UpdatePlaceholder();
+            UpdateWidget();
+        }
+    }
+    AcquireSRWLockExclusive(&g_bluetoothChangesLock);
+    g_bluetoothChanges.emplace_back(device.address, connected);
+    ReleaseSRWLockExclusive(&g_bluetoothChangesLock);
+    SetEvent(g_refreshEvt);
+}
 
 LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == g_taskbarCreatedMsg && msg != 0) {  // Explorer restarted
@@ -685,9 +816,9 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     switch (msg) {
         case WM_RESULTS: {
-            auto* v = reinterpret_cast<std::vector<DeviceStatus>*>(lp);
-            OnResults(*v);
-            delete v;
+            auto* result = reinterpret_cast<PollResult*>(lp);
+            OnResults(*result);
+            delete result;
             return 0;
         }
         case WM_TRAY:
@@ -704,6 +835,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (wp) DestroyWindow(h);
             return 0;
         case WM_DEVICECHANGE:
+            OnBluetoothDeviceChange(wp, lp);
             if (wp == DBT_DEVICEARRIVAL || wp == DBT_DEVICEREMOVECOMPLETE) RefreshSoon(2500);
             return TRUE;
         case WM_POWERBROADCAST:
@@ -838,6 +970,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
 
     g_refreshEvt = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     g_stopEvt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    filter.dbcc_classguid = GUID_BTHPORT_DEVICE_INTERFACE;
+    HDEVNOTIFY bluetoothNotify = RegisterDeviceNotificationW(g_hwnd, &filter, DEVICE_NOTIFY_WINDOW_HANDLE);
+    RegisterBluetoothRadios();
     g_wantWidget = LoadWidgetMode();
     g_hideLastKnown = LoadHideLastKnown();
     g_widgetBackground = LoadWidgetBackground();
@@ -858,8 +993,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
         DispatchMessageW(&m);
     }
     // drain results posted after shutdown started
-    while (PeekMessageW(&m, nullptr, WM_RESULTS, WM_RESULTS, PM_REMOVE)) delete reinterpret_cast<std::vector<DeviceStatus>*>(m.lParam);
+    while (PeekMessageW(&m, nullptr, WM_RESULTS, WM_RESULTS, PM_REMOVE)) delete reinterpret_cast<PollResult*>(m.lParam);
     if (notify) UnregisterDeviceNotification(notify);
+    if (bluetoothNotify) UnregisterDeviceNotification(bluetoothNotify);
+    UnregisterBluetoothRadios();
     if (g_worker) CloseHandle(g_worker);
     ReleaseMutex(mutex);
     return 0;
