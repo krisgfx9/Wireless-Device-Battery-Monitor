@@ -4,6 +4,7 @@
 #include <uiautomation.h>
 #include <algorithm>
 #include <climits>
+#include <utility>
 
 namespace {
 
@@ -324,34 +325,63 @@ struct Canvas {
     }
 };
 
-struct Piece { Mask m; Rgb color; int alpha; int gapAfter; };
+struct Piece { Mask m; Rgb color; int alpha; int x, y; };
 
-std::vector<Piece> Layout(int& width) {
+std::vector<Piece> Layout(int height, int& width) {
     Rgb fg = g_light ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 };
     Rgb red = g_light ? Rgb{ 196, 30, 40 } : Rgb{ 255, 90, 90 };
     Rgb charge = g_light ? Rgb{ 0, 120, 212 } : Rgb{ 96, 205, 255 };
-    HFONT icons = MakeFont(Px(16), FW_NORMAL, L"Segoe Fluent Icons", L"Segoe MDL2 Assets");
+    const int iconHeight = Px(16);
+    const int textHeight = Px(13);
+    const int rowGap = Px(2);
+    const int stackHeight = iconHeight + rowGap + textHeight;
+    const bool compact = height >= stackHeight + Px(4);
+    const int top = (height - stackHeight) / 2;
+    const int iconCenter = compact ? top + iconHeight / 2 : height / 2;
+    const int textCenter = compact ? top + iconHeight + rowGap + textHeight / 2 : height / 2;
+    HFONT icons = MakeFont(iconHeight, FW_NORMAL, L"Segoe Fluent Icons", L"Segoe MDL2 Assets");
     HFONT bolt = MakeFont(Px(11), FW_NORMAL, L"Segoe Fluent Icons", L"Segoe MDL2 Assets");
-    HFONT text = MakeFont(Px(13), FW_NORMAL, L"Segoe UI Variable Text", L"Segoe UI", Px(12));
+    HFONT text = MakeFont(textHeight, FW_NORMAL, L"Segoe UI Variable Text", L"Segoe UI", Px(12));
 
     std::vector<Piece> out;
-    if (g_items.empty()) out.push_back({ RenderMask(std::wstring(1, kBatteryUnknown), icons, g_light), fg, 110, 0 });
-    for (size_t i = 0; i < g_items.size(); i++) {
-        const auto& it = g_items[i];
+    const int padding = Px(8);
+    int x = padding;
+    auto place = [&](Mask m, int left, int center, Rgb color, int alpha) {
+        const int y = center - m.h / 2;
+        out.push_back({ std::move(m), color, alpha, left, y });
+    };
+    if (g_items.empty()) {
+        Mask empty = RenderMask(std::wstring(1, kBatteryUnknown), icons, g_light);
+        const int emptyWidth = empty.w;
+        place(std::move(empty), x, height / 2, fg, 110);
+        x += emptyWidth;
+    }
+    for (const auto& it : g_items) {
+        if (x > padding) x += compact ? Px(8) : Px(14);
         int a = it.dim ? 120 : 255;
-        Rgb tc = it.low ? red : fg;
-        out.push_back({ RenderMask(std::wstring(1, Glyph(it.kind, it.bluetooth)), icons, g_light), fg, a, Px(5) });
         std::wstring t = !it.text.empty() ? it.text : it.percent >= 0 ? std::to_wstring(it.percent) + L"%" : L"?";
-        out.push_back({ RenderMask(t, text, g_light), tc, a, it.charging ? Px(2) : 0 });
-        if (it.charging) out.push_back({ RenderMask(std::wstring(1, kBolt), bolt, g_light), charge, a, 0 });
-        out.back().gapAfter = i + 1 < g_items.size() ? Px(14) : 0;
+        Mask icon = RenderMask(std::wstring(1, Glyph(it.kind, it.bluetooth)), icons, g_light);
+        Mask level = RenderMask(t, text, g_light);
+        Mask lightning = it.charging ? RenderMask(std::wstring(1, kBolt), bolt, g_light) : Mask{};
+        const int boltGap = Px(2);
+        const int boltWidth = it.charging ? boltGap + lightning.w : 0;
+        const int slotWidth = compact ? std::max(icon.w + boltWidth, level.w)
+                                      : icon.w + Px(5) + level.w + boltWidth;
+        const int iconX = compact ? x + (slotWidth - icon.w - boltWidth) / 2 : x;
+        const int levelX = compact ? x + (slotWidth - level.w) / 2 : x + icon.w + Px(5);
+        if (it.charging) {
+            const int boltX = compact ? iconX + icon.w + boltGap : levelX + level.w + boltGap;
+            place(std::move(lightning), boltX, compact ? iconCenter : textCenter, charge, a);
+        }
+        place(std::move(icon), iconX, iconCenter, fg, a);
+        place(std::move(level), levelX, textCenter, it.low ? red : fg, a);
+        x += slotWidth;
     }
     DeleteObject(icons);
     DeleteObject(bolt);
     DeleteObject(text);
 
-    width = Px(8) * 2;
-    for (auto& p : out) width += p.m.w + p.gapAfter;
+    width = x + padding;
     return out;
 }
 
@@ -361,8 +391,8 @@ void PaintStrip(HWND wnd, HWND taskbar, bool hover, SIZE& size) {
     GetClientRect(taskbar, &bar);
     int H = bar.bottom - bar.top;
     int W = 0;
-    auto pieces = Layout(W);
-    if (W <= 0 || H <= 0) return;
+    if (H <= 0) return;
+    auto pieces = Layout(H, W);
     Canvas cv(W, H);
 
     // Nearly transparent background so the whole strip receives mouse input,
@@ -381,11 +411,7 @@ void PaintStrip(HWND wnd, HWND taskbar, bool hover, SIZE& size) {
     if (g_background) roundRect(Px(4), Px(6), g_light ? Rgb{ 243, 243, 243 } : Rgb{ 32, 32, 32 }, 240);
     if (hover) roundRect(Px(4), Px(4), g_light ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 }, g_light ? 20 : 26);
 
-    int x = Px(8);
-    for (auto& p : pieces) {
-        cv.Draw(p.m, x, (H - p.m.h) / 2, p.color, p.alpha);
-        x += p.m.w + p.gapAfter;
-    }
+    for (const auto& p : pieces) cv.Draw(p.m, p.x, p.y, p.color, p.alpha);
 
     HDC screen = GetDC(nullptr);
     HDC mem = CreateCompatibleDC(screen);

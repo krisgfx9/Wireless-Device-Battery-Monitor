@@ -1,6 +1,6 @@
 #pragma once
 // A small transparent strip on the taskbar, just left of the notification area, showing
-// "[icon] 30%  [icon] 93%". Implemented as a layered child window of the taskbar (Shell_TrayWnd), with a
+// device icons and battery levels. Implemented as a layered child window of the taskbar (Shell_TrayWnd), with a
 // copy on each secondary-monitor taskbar (Shell_SecondaryTrayWnd) next to its clock.
 #include <windows.h>
 #include <string>
