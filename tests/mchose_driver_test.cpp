@@ -9,10 +9,10 @@ std::vector<std::vector<BYTE>> replies;
 int opens = 0, requests = 0, reads = 0;
 bool openOk = true, setOk = true, getOk = true;
 
-HidColl Receiver() {
+HidColl Collection(USHORT pid) {
     HidColl c;
     c.vid = 0x5253;
-    c.pid = 0x1020;
+    c.pid = pid;
     c.iface = 2;
     c.caps.UsagePage = 0xFF01;
     c.caps.Usage = 1;
@@ -31,11 +31,12 @@ std::vector<BYTE> Status(BYTE percent = 73, BYTE charge = 0, BYTE flags = 9) {
     return r;
 }
 
-PollContext Poll(std::vector<std::vector<BYTE>> frames) {
+PollContext Poll(std::vector<std::vector<BYTE>> frames, bool wired = false, bool receiver = true) {
     replies = std::move(frames);
     requests = reads = 0;
     PollContext ctx;
-    ctx.colls = { Receiver() };
+    if (wired) ctx.colls.push_back(Collection(0x0031));
+    if (receiver) ctx.colls.push_back(Collection(0x1020));
     PollMchose(ctx);
     return ctx;
 }
@@ -75,6 +76,24 @@ int main() {
     assert(s.percent == 73 && !s.charging && s.kind == DeviceKind::Mouse);
     assert(s.via == L"2.4 GHz receiver" && s.graceSec == 1800);
     assert(requests == 1 && reads == 1);
+    ctx = Poll({ Status(61, 1, 0) }, true, false);
+    assert(ctx.out.size() == 1 && ctx.IsClaimed(0x5253, 0x0031));
+    assert(ctx.out[0].name == L"MCHOSE M7 Ultra" && ctx.out[0].key == L"mchose:m7ultra");
+    assert(ctx.out[0].percent == 61 && ctx.out[0].charging);
+    assert(ctx.out[0].via == L"USB cable" && ctx.out[0].graceSec == 1800);
+    assert(requests == 1 && reads == 1);
+    // When both connections are present, keep the wired reading and claim the receiver as a duplicate.
+    ctx = Poll({ Status(61, 1, 0) }, true, true);
+    assert(ctx.out.size() == 1 && ctx.out[0].via == L"USB cable");
+    assert(ctx.IsClaimed(0x5253, 0x0031) && ctx.IsClaimed(0x5253, 0x1020));
+    assert(requests == 1 && reads == 1);
+    ctx = Poll({ Status(61, 1, 1), Status(72, 0, 9) }, true, true);
+    assert(ctx.out.size() == 1 && ctx.out[0].via == L"2.4 GHz receiver" && ctx.out[0].percent == 72);
+    assert(!ctx.IsClaimed(0x5253, 0x0031) && ctx.IsClaimed(0x5253, 0x1020));
+    ctx = Poll({ Status(61, 1, 1) }, true, false);
+    assert(ctx.out.empty() && ctx.claimed.empty());  // reject a receiver report on the wired PID
+    ctx = Poll({ Status(61, 1, 9) }, false, false);
+    assert(ctx.out.empty() && ctx.claimed.empty());  // reject a wired report on the receiver PID
     for (BYTE percent : { 0, 100 }) {
         ctx = Poll({ Status(percent, 1) });
         assert(ctx.out.size() == 1 && ctx.out[0].percent == percent && ctx.out[0].charging);
@@ -112,7 +131,7 @@ int main() {
     opens = 0;
     ctx = {};
     for (int field = 0; field < 6; ++field) {
-        auto c = Receiver();
+        auto c = Collection(0x1020);
         switch (field) {
         case 0: c.vid = 0x1234; break;
         case 1: c.pid = 0x1021; break;
@@ -125,7 +144,7 @@ int main() {
     }
     PollMchose(ctx);
     assert(opens == 0 && ctx.out.empty());
-    ctx.colls = { Receiver() };
+    ctx.colls = { Collection(0x1020) };
     ctx.Claim(0x5253, 0x1020);
     PollMchose(ctx);
     assert(opens == 0);
@@ -141,5 +160,5 @@ int main() {
     getOk = false;
     ctx = Poll({ Status() });
     assert(ctx.out.empty() && requests == 1 && reads == 1);
-    std::puts("MCHOSE driver tests passed (battery, charging, identity, filtering, retries, failures).");
+    std::puts("MCHOSE driver tests passed (receiver/USB, charging, deduplication, identity, filtering, retries, failures).");
 }
