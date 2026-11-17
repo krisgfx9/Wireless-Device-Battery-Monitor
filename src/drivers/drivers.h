@@ -76,6 +76,8 @@ void PollKysona(PollContext& ctx);    // also Pulsar, ATK / VXE, Hitscan Hyperli
 void PollRazerHeadsets(PollContext& ctx);  // Razer BlackShark V3 / V3 Pro
 void PollKysona(PollContext& ctx);    // also Pulsar, ATK / VXE, Hitscan Hyperlight, Redragon (incl. dual-mode M913)
 void PollHyperX(PollContext& ctx);
+void PollG435(PollContext& ctx);  // Logitech G435 on 046D:0ACB and 046D:0ADF LIGHTSPEED receivers
+void G435RequestRead();           // force the next poll to query the G435 battery
 void PollLogitech(PollContext& ctx);
 void PollRazer(PollContext& ctx);
 void PollSteelSeries(PollContext& ctx);
