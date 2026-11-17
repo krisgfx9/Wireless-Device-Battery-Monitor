@@ -56,6 +56,9 @@ void PollMiscMice(PollContext& ctx);  // Motospeed X6, Delux M900 Pro, Ajazz AJ1
 void PollRazerHeadsets(PollContext& ctx);  // Razer BlackShark V3 / V3 Pro
 void PollKysona(PollContext& ctx);    // also Pulsar, ATK / VXE, Hitscan Hyperlight
 void PollHyperX(PollContext& ctx);
+void PollG435(PollContext& ctx);      // Logitech G435 LIGHTSPEED headset (046D:0ACB), proprietary bridge
+// Reads the battery once from an already-open G435 device (used by PollG435 and the unit tests).
+void G435ReadBattery(HidDev& d, DeviceStatus& s);
 void PollLogitech(PollContext& ctx);
 void PollRazer(PollContext& ctx);
 void PollSteelSeries(PollContext& ctx);
