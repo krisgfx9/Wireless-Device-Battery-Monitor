@@ -6,6 +6,7 @@
 #include <hidclass.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <map>
 #include <set>
@@ -22,12 +23,16 @@ constexpr UINT WM_RESULTS = WM_APP + 2;
 constexpr UINT WM_WIDGET_CLICK = WM_APP + 3;
 constexpr UINT_PTR TIMER_DEBOUNCE = 1;
 constexpr UINT_PTR TIMER_WIDGET = 2;
-constexpr DWORD POLL_INTERVAL_MS = 60 * 1000;
+constexpr DWORD kIntervals[] = {5, 10, 15, 30, 60};
+constexpr DWORD kDefaultInterval = 15;
+std::atomic<DWORD> g_interval{kDefaultInterval};
+std::atomic<bool> g_smartDetection{true};
 constexpr int LOW_BATTERY = 15;
 constexpr UINT PLACEHOLDER_ID = 1;
 
 enum MenuId : UINT {
     ID_REFRESH = 100, ID_AUTOSTART, ID_HIDE_LAST_KNOWN, ID_WIDGET_BACKGROUND, ID_EXIT, ID_MODE_WIDGET, ID_MODE_TRAY, ID_SUPPORT,
+    ID_SMART = 200, ID_INTERVAL_FIRST = 210,
     ID_DEVICE_FIRST = 1000
 };
 
@@ -39,7 +44,7 @@ const wchar_t* kSettingsKey = L"Software\\WirelessBattery";
 
 HINSTANCE g_inst;
 HWND g_hwnd;
-HANDLE g_refreshEvt, g_stopEvt, g_worker;
+HANDLE g_refreshEvt, g_jblRefreshEvt, g_stopEvt, g_worker, g_jblWorker;
 UINT g_taskbarCreatedMsg;
 bool g_lightTaskbar;
 bool g_wantWidget = true;      // user's choice: taskbar widget (default) or tray icons
@@ -128,6 +133,23 @@ bool LoadBoolSetting(const wchar_t* name, bool defaultVal) {
 void SaveBoolSetting(const wchar_t* name, bool on) {
     DWORD v = on ? 1 : 0;
     RegSetKeyValueW(HKEY_CURRENT_USER, kSettingsKey, name, REG_DWORD, &v, sizeof(v));
+}
+
+void LoadDetectionSettings() {
+    DWORD value = kDefaultInterval, sz = sizeof(value);
+    RegGetValueW(HKEY_CURRENT_USER, kSettingsKey, L"RefreshIntervalSeconds", RRF_RT_REG_DWORD, nullptr, &value, &sz);
+    if (std::find(std::begin(kIntervals), std::end(kIntervals), value) == std::end(kIntervals)) value = kDefaultInterval;
+    g_interval = value;
+    g_smartDetection = LoadBoolSetting(L"SmartDetection", true);
+}
+void RefreshWorkers() {
+    SetEvent(g_refreshEvt);
+    SetEvent(g_jblRefreshEvt);
+}
+void SetInterval(DWORD value) {
+    g_interval = value;
+    RegSetKeyValueW(HKEY_CURRENT_USER, kSettingsKey, L"RefreshIntervalSeconds", REG_DWORD, &value, sizeof(value));
+    RefreshWorkers();
 }
 
 bool LoadWidgetMode() { return LoadBoolSetting(L"TaskbarWidget", true); }
@@ -402,9 +424,33 @@ void UpdateWidget() {
     widget::SetItems(items, tip);
 }
 
-void OnResults(std::vector<DeviceStatus>& results) {
+bool IsJblResult(const DeviceStatus& s) {
+    return s.key.rfind(L"jbl-speaker:", 0) == 0;
+}
+
+void OnResults(std::vector<DeviceStatus>& results, bool jblOnly) {
+    // Each independent worker owns only its result domain. A slow or missing JBL
+    // response must never invalidate a USB mouse (or vice versa).
     std::map<std::wstring, bool> seen;
     for (auto& s : results) {
+        if (IsJblResult(s) != jblOnly) continue;
+        if (!jblOnly && s.via == L"Bluetooth") {
+            bool duplicate = false;
+            for (const auto& entry : g_entries)
+                if (IsJblResult(entry.second.st) && entry.second.st.name == s.name &&
+                    entry.second.st.percent >= 0) { duplicate = true; break; }
+            if (duplicate) continue;
+        }
+        if (jblOnly) {
+            for (auto it = g_entries.begin(); it != g_entries.end();) {
+                if (!IsJblResult(it->second.st) && it->second.st.via == L"Bluetooth" &&
+                    it->second.st.name == s.name) {
+                    if (it->second.added) TrayDelete(it->second.uid);
+                    if (it->second.icon) DestroyIcon(it->second.icon);
+                    it = g_entries.erase(it);
+                } else ++it;
+            }
+        }
         auto& e = g_entries[s.key];
         if (!e.uid) e.uid = StableId(s.key);
         e.st = s;
@@ -415,6 +461,7 @@ void OnResults(std::vector<DeviceStatus>& results) {
     }
     for (auto it = g_entries.begin(); it != g_entries.end();) {
         auto& e = it->second;
+        if (IsJblResult(e.st) != jblOnly) { ++it; continue; }
         // Some receivers drop sleeping devices from the link; keep showing the last value for a while.
         bool inGrace = !seen.count(it->first) && e.st.graceSec > 0 && e.st.connected &&
                        GetTickCount64() - e.lastSeen < (ULONGLONG)e.st.graceSec * 1000;
@@ -507,6 +554,16 @@ void ShowMenu() {
     UINT bgFlags = MF_STRING | (g_widgetBackground ? MF_CHECKED : 0) | (g_wantWidget ? 0 : MF_GRAYED);
     AppendMenuW(m, bgFlags, ID_WIDGET_BACKGROUND, L"Background behind taskbar text (for transparent taskbars)");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING | (g_smartDetection.load() ? MF_CHECKED : 0), ID_SMART, L"Smart detection");
+    HMENU intervals = CreatePopupMenu();
+    for (UINT i = 0; i < sizeof(kIntervals) / sizeof(kIntervals[0]); ++i) {
+        auto label = std::to_wstring(kIntervals[i]) + L" seconds";
+        if (kIntervals[i] == kDefaultInterval) label += L" (recommended)";
+        AppendMenuW(intervals, MF_STRING, ID_INTERVAL_FIRST + i, label.c_str());
+        if (kIntervals[i] == g_interval.load())
+            CheckMenuRadioItem(intervals, ID_INTERVAL_FIRST, ID_INTERVAL_FIRST + i, ID_INTERVAL_FIRST + i, MF_BYCOMMAND);
+    }
+    AppendMenuW(m, MF_POPUP, reinterpret_cast<UINT_PTR>(intervals), L"Battery refresh interval");
     AppendMenuW(m, MF_STRING, ID_REFRESH, L"Refresh now");
     AppendMenuW(m, MF_STRING | (AutostartEnabled() ? MF_CHECKED : 0), ID_AUTOSTART, L"Start with Windows");
     AppendMenuW(m, MF_STRING, ID_SUPPORT, L"Support the project...");
@@ -519,7 +576,12 @@ void ShowMenu() {
     PostMessageW(g_hwnd, WM_NULL, 0, 0);
     DestroyMenu(m);
     switch (cmd) {
-        case ID_REFRESH: SetEvent(g_refreshEvt); break;
+        case ID_REFRESH: RefreshWorkers(); break;
+        case ID_SMART:
+            g_smartDetection = !g_smartDetection.load();
+            SaveBoolSetting(L"SmartDetection", g_smartDetection.load());
+            RefreshWorkers();
+            break;
         case ID_AUTOSTART: SetAutostart(!AutostartEnabled()); break;
         case ID_HIDE_LAST_KNOWN: SetHideLastKnown(!g_hideLastKnown); break;
         case ID_WIDGET_BACKGROUND: SetWidgetBackground(!g_widgetBackground); break;
@@ -528,7 +590,9 @@ void ShowMenu() {
         case ID_SUPPORT: ShellExecuteW(nullptr, L"open", L"https://github.com/sponsors/krisgfx9", nullptr, nullptr, SW_SHOWNORMAL); break;
         case ID_EXIT: DestroyWindow(g_hwnd); break;
         default:
-            if (cmd >= ID_DEVICE_FIRST && cmd < ID_DEVICE_FIRST + keys.size()) {
+            if (cmd >= ID_INTERVAL_FIRST && cmd < ID_INTERVAL_FIRST + sizeof(kIntervals) / sizeof(kIntervals[0])) {
+                SetInterval(kIntervals[cmd - ID_INTERVAL_FIRST]);
+            } else if (cmd >= ID_DEVICE_FIRST && cmd < ID_DEVICE_FIRST + keys.size()) {
                 const std::wstring& key = keys[cmd - ID_DEVICE_FIRST];
                 if (!g_hidden.erase(key)) g_hidden.insert(key);
                 SaveHidden();
@@ -542,12 +606,33 @@ void ShowMenu() {
 
 // ---- worker thread ----------------------------------------------------------------------------
 
-DWORD WINAPI Worker(LPVOID) {
+DWORD WINAPI Worker(LPVOID param) {
+    const bool jblOnly = param != nullptr;
+    HANDLE hs[2] = { g_stopEvt, jblOnly ? g_jblRefreshEvt : g_refreshEvt };
+    bool retried = false;
+    bool firstPoll = true;
+    std::set<std::wstring> previousKeys;
     for (;;) {
-        auto* v = new std::vector<DeviceStatus>(PollAllDevices());
-        if (!PostMessageW(g_hwnd, WM_RESULTS, 0, (LPARAM)v)) delete v;
-        HANDLE hs[2] = { g_stopEvt, g_refreshEvt };
-        if (WaitForMultipleObjects(2, hs, FALSE, POLL_INTERVAL_MS) == WAIT_OBJECT_0) return 0;
+        if (WaitForSingleObject(g_stopEvt, 0) == WAIT_OBJECT_0) return 0;
+        auto* v = new std::vector<DeviceStatus>(jblOnly ? PollJblDevices() : PollMainDevices());
+        std::set<std::wstring> currentKeys;
+        for (const auto& s : *v)
+            if (s.connected && s.percent >= 0) currentKeys.insert(s.key);
+        bool missing = firstPoll || !std::includes(currentKeys.begin(), currentKeys.end(),
+                                                   previousKeys.begin(), previousKeys.end());
+        firstPoll = false;
+        previousKeys = std::move(currentKeys);
+        if (!PostMessageW(g_hwnd, WM_RESULTS, jblOnly ? 1 : 0, (LPARAM)v)) delete v;
+        DWORD delay = g_interval.load() * 1000;
+        // One prompt retry after startup or a previously detected device misses a poll.
+        // Other drivers retain their original serial ordering and timeout rules.
+        if (g_smartDetection.load() && missing && !retried) {
+            delay = 2000;
+            retried = true;
+        } else {
+            retried = false;
+        }
+        if (WaitForMultipleObjects(2, hs, FALSE, delay) == WAIT_OBJECT_0) return 0;
     }
 }
 
@@ -564,7 +649,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_RESULTS: {
             auto* v = reinterpret_cast<std::vector<DeviceStatus>*>(lp);
-            OnResults(*v);
+            OnResults(*v, wp != 0);
             delete v;
             return 0;
         }
@@ -582,13 +667,13 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (wp) DestroyWindow(h);
             return 0;
         case WM_DEVICECHANGE:
-            if (wp == DBT_DEVICEARRIVAL || wp == DBT_DEVICEREMOVECOMPLETE) RefreshSoon(2500);
+            if (wp == DBT_DEVICEARRIVAL || wp == DBT_DEVICEREMOVECOMPLETE) RefreshSoon(g_smartDetection.load() ? 500 : 2500);
             return TRUE;
         case WM_POWERBROADCAST:
-            if (wp == PBT_APMRESUMEAUTOMATIC) RefreshSoon(5000);
+            if (wp == PBT_APMRESUMEAUTOMATIC) RefreshSoon(g_smartDetection.load() ? 1000 : 5000);
             return TRUE;
         case WM_TIMER:
-            if (wp == TIMER_DEBOUNCE) { KillTimer(h, TIMER_DEBOUNCE); SetEvent(g_refreshEvt); }
+            if (wp == TIMER_DEBOUNCE) { KillTimer(h, TIMER_DEBOUNCE); RefreshWorkers(); }
             if (wp == TIMER_WIDGET) Reconcile();
             return 0;
         case WM_SETTINGCHANGE:
@@ -602,6 +687,10 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             widget::Destroy();
             SetEvent(g_stopEvt);
             if (g_worker) WaitForSingleObject(g_worker, 5000);
+            if (g_jblWorker) WaitForSingleObject(g_jblWorker, 5000);
+            MSG pending{};
+            while (PeekMessageW(&pending, h, WM_RESULTS, WM_RESULTS, PM_REMOVE))
+                delete reinterpret_cast<std::vector<DeviceStatus>*>(pending.lParam);
             for (auto& [k, e] : g_entries) {
                 if (e.added) TrayDelete(e.uid);
                 if (e.icon) DestroyIcon(e.icon);
@@ -683,7 +772,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     HDEVNOTIFY notify = RegisterDeviceNotificationW(g_hwnd, &filter, DEVICE_NOTIFY_WINDOW_HANDLE);
 
     g_refreshEvt = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    g_jblRefreshEvt = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     g_stopEvt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    LoadDetectionSettings();
     g_wantWidget = LoadWidgetMode();
     g_hideLastKnown = LoadHideLastKnown();
     g_widgetBackground = LoadWidgetBackground();
@@ -693,6 +784,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     UpdatePlaceholder();  // something to click on until the first poll finishes
     SetTimer(g_hwnd, TIMER_WIDGET, 1000, nullptr);
     g_worker = CreateThread(nullptr, 0, Worker, nullptr, 0, nullptr);
+    g_jblWorker = CreateThread(nullptr, 0, Worker, reinterpret_cast<LPVOID>(1), 0, nullptr);
 
     MSG m;
     while (GetMessageW(&m, nullptr, 0, 0) > 0) {
@@ -703,6 +795,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     while (PeekMessageW(&m, nullptr, WM_RESULTS, WM_RESULTS, PM_REMOVE)) delete reinterpret_cast<std::vector<DeviceStatus>*>(m.lParam);
     if (notify) UnregisterDeviceNotification(notify);
     if (g_worker) CloseHandle(g_worker);
+    if (g_jblWorker) CloseHandle(g_jblWorker);
+    CloseHandle(g_jblRefreshEvt);
     ReleaseMutex(mutex);
     return 0;
 }

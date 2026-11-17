@@ -2,7 +2,7 @@
 #include <string>
 #include <vector>
 
-enum class DeviceKind { Other, Mouse, Headset, Keyboard, Gamepad, Phone };
+enum class DeviceKind { Other, Mouse, Headset, Keyboard, Gamepad, Phone, Speaker };
 
 // One battery-powered device, as seen during a single poll.
 struct DeviceStatus {
@@ -22,6 +22,8 @@ struct DeviceStatus {
 
 // Queries every supported device. Blocking (can take a second or two); call from a worker thread.
 std::vector<DeviceStatus> PollAllDevices();
+std::vector<DeviceStatus> PollMainDevices();
+std::vector<DeviceStatus> PollJblDevices();
 
 // Prints every HID collection (for adding support for new devices).
 std::wstring DumpHidCollections();

@@ -125,6 +125,7 @@ wchar_t Glyph(DeviceKind k, bool bluetooth) {
         case DeviceKind::Mouse:    return 0xE962;  // Mouse
         case DeviceKind::Keyboard: return 0xE765;  // KeyboardClassic
         case DeviceKind::Gamepad:  return 0xE7FC;  // Game
+        case DeviceKind::Speaker:  return 0xE7F5;  // Speakers
         case DeviceKind::Phone:    return 0xE8EA;  // CellPhone
         default:                   return bluetooth ? 0xE702 : 0xE772;  // Bluetooth / Devices
     }

@@ -36,7 +36,7 @@ std::vector<std::pair<USHORT, USHORT>> IgnoredDevices() {
 
 }  // namespace
 
-std::vector<DeviceStatus> PollAllDevices() {
+std::vector<DeviceStatus> PollMainDevices() {
     PollContext ctx;
     ctx.colls = EnumHid();
     auto ignored = IgnoredDevices();
@@ -92,10 +92,29 @@ std::vector<DeviceStatus> PollAllDevices() {
     PollGalaxyBuds(ctx);  // before the Bluetooth fallback, which skips devices already listed by name
     PollMoondrop(ctx);
     PollHeadsetControl(ctx);
+
     PollBluetooth(ctx);   // before the generic HID check: Windows' own level wins for the same device
     PollGenericHid(ctx);
     PollXInput(ctx);
     return ctx.out;
+}
+
+std::vector<DeviceStatus> PollJblDevices() {
+    PollContext ctx;
+    PollJblSpeaker(ctx);
+    return ctx.out;
+}
+
+std::vector<DeviceStatus> PollAllDevices() {
+    auto result = PollMainDevices();
+    auto jbl = PollJblDevices();
+    for (const auto& s : jbl) {
+        result.erase(std::remove_if(result.begin(), result.end(), [&](const DeviceStatus& other) {
+            return other.name == s.name && other.via == L"Bluetooth";
+        }), result.end());
+        result.push_back(s);
+    }
+    return result;
 }
 
 std::wstring DumpHidCollections() {
