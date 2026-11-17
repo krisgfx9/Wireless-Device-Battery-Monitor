@@ -84,8 +84,11 @@ bool RenderDirectWrite(const std::wstring& s, const wchar_t* face, const wchar_t
     std::vector<FLOAT> advances(n);
     DWRITE_FONT_METRICS fm{};
     fontFace->GetMetrics(&fm);
-    bool ok = n > 0 && SUCCEEDED(fontFace->GetGlyphIndices(codepoints.data(), n, glyphs.data())) &&
-              SUCCEEDED(fontFace->GetDesignGlyphMetrics(glyphs.data(), n, metrics.data(), FALSE));
+    bool ok = n > 0 && SUCCEEDED(fontFace->GetGlyphIndices(codepoints.data(), n, glyphs.data()));
+    // Glyph 0 is the font's "missing character" box. GDI would borrow the glyph from another
+    // font in that case, so let it handle any string this font cannot show in full.
+    for (UINT32 i = 0; ok && i < n; i++) ok = glyphs[i] != 0;
+    ok = ok && SUCCEEDED(fontFace->GetDesignGlyphMetrics(glyphs.data(), n, metrics.data(), FALSE));
     for (UINT32 i = 0; ok && i < n; i++)
         advances[i] = (FLOAT)metrics[i].advanceWidth * px / fm.designUnitsPerEm + spacing;
 
