@@ -31,6 +31,7 @@ Hover for details. Click for the menu: every device (click one to hide or show i
 | Vendor | Devices | How |
 |---|---|---|
 | **Logitech** | Mice and keyboards on Unifying, Bolt, Lightspeed and Nano receivers, over USB or Bluetooth; G headsets (G533, G535, G633/G635/G733/G933/G935, G PRO/PRO X) | HID++ 1.0 / 2.0 with feature discovery: unified battery, battery level, voltage, ADC |
+| **Logitech G435** | G435 on the original Realtek LIGHTSPEED receiver (`046D:0ACB`) or the newer Holtek receiver (`046D:0ADF`) | Realtek PA bridge on feature report 6 / Holtek CRC-16 bridge on usage page FF00 (voltage; cached, see Limitations) |
 | **Razer** | Wireless mice, keyboards and dongles; BlackShark V3 / V3 Pro and BlackShark V2 Pro (2023) headsets | Razer feature-report protocol; headset envelope protocols (V3 queried every 5 min) |
 | **SteelSeries** | Arctis 1/7/7+/9/Pro/Pro Wireless, Arctis Nova 3P/5/7/7X/7P/Pro Wireless, GameBuds; Aerox 3/5/9 Wireless, Prime Wireless, Rival 3 Wireless (Gen 2), Rival 650, Rival Pro | Vendor HID reports |
 | **Corsair** | Void / Void Pro / Void Elite / HS70 / HS80 wireless; Bragi devices (Virtuoso, Void V2, HS80 MAX, Slipstream mice and keyboards, including the newer Slipstream receiver `1B1C:2B00`, e.g. Scimitar Elite SE Wireless) | Vendor HID reports, Bragi `GET` (read-only) |
@@ -121,6 +122,7 @@ just lose the extra headsets.
 
 ## Limitations
 
+- **Logitech G435:** neither LIGHTSPEED receiver has a passive battery channel. The Realtek dongle (`046D:0ACB`) mutes USB audio for about a second while its bootloader bridge is open; the Holtek dongle (`046D:0ADF`) briefly switches to remote mode for the same OTA query. The G435 is therefore read at most every 45 minutes (every 5 minutes while the headset is off) and when you click *Refresh now*. The percentage is estimated from the voltage with a generic Li-ion curve. If audio ever stays muted on the Realtek receiver, unplug and replug it. G435 support is based on community protocol research; please confirm with `WirelessBattery.exe --list` / `--dump` on your receiver if you test this PR.
 - **Primary monitor only:** the taskbar widget sits on the primary monitor's taskbar.
 - **Crowded taskbars:** with a very full centered Windows 11 taskbar, the app buttons can reach the widget. On Windows 10 the task-button area is narrowed automatically.
 - **Phones:** read from a file Phone Link writes for the Start menu companion card, which is not a documented API and may change with Phone Link updates. The phone shows while Phone Link reports it as connected; a card older than 3 hours is shown dimmed. Charging state is not available there.
@@ -145,6 +147,7 @@ The protocols come from these projects' research:
 - [inzone-buds-battery-tray](https://github.com/kinako19/inzone-buds-battery-tray) (kinako19) and [inzone-buds-battery-tray](https://github.com/takamachi66/inzone-buds-battery-tray) (takamachi66): Sony INZONE Buds
 - [OpenRazer](https://github.com/openrazer/openrazer): Razer
 - [Solaar](https://github.com/pwr-Solaar/Solaar) and the Logitech HID++ 2.0 documents: Logitech
+- [g435-lightspeed-battery](https://github.com/fr0styJS/g435-lightspeed-battery) and [G435-Battery-app](https://github.com/DsGrilo/G435-Battery-app): Logitech G435 Realtek (`0ACB`) and Holtek (`0ADF`) receivers
 - [rivalcfg](https://github.com/flozz/rivalcfg): SteelSeries mice (Rival Pro from its pull request #294)
 - [glorious-indicator](https://github.com/ikajdan/glorious-indicator) and [glorious-ctl](https://github.com/louis4craft/glorious-ctl): Glorious
 - Hitscan's web configurator ([control.hitscan.com](https://control.hitscan.com)): Hitscan
