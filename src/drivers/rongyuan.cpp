@@ -58,9 +58,16 @@ void PollRongyuan(PollContext& ctx) {
             bool generic = product.empty() || product.find(L"Receiver") != std::wstring::npos || product.find(L"2.4G") != std::wstring::npos;
             bool any = false;
             // Slot layout: [2] keyboard %, [3] mouse %, [4] keyboard offline, [5] mouse offline.
+            //
+            // Keyboard-only dongles (MonsGeek / RongYuan 0x5038 and relatives) use a slightly
+            // different dialect: the mouse slot simply reports "not paired" (byte 5 = 1) and byte 4
+            // is the charging flag, as documented for the RY5088 keyboards. Reading byte 4 as
+            // "keyboard offline" made the keyboard disappear from the list while it was on the
+            // cable, so on those dongles the slot is kept and the byte only marks charging.
+            bool keyboardOnly = r[5] != 0;
             for (int slot = 0; slot < 2; slot++) {
                 bool keyboard = slot == 0;
-                if (r[keyboard ? 4 : 5] != 0) continue;  // nothing connected in this slot
+                if (keyboard ? (r[4] != 0 && !keyboardOnly) : r[5] != 0) continue;  // nothing connected in this slot
                 BYTE level = r[keyboard ? 2 : 3];
                 DeviceStatus s;
                 s.key = L"rongyuan:" + Hex4(vid) + L":" + Hex4(pid) + (keyboard ? L":kb" : L":ms");
@@ -69,6 +76,7 @@ void PollRongyuan(PollContext& ctx) {
                 else s.name = product;
                 s.kind = keyboard ? DeviceKind::Keyboard : DeviceKind::Mouse;
                 s.via = L"2.4 GHz receiver";
+                if (keyboard && keyboardOnly) s.charging = r[4] != 0;  // byte 4 is "on the charger" there
                 if (level >= 1 && level <= 100) s.percent = level;
                 ctx.out.push_back(s);
                 any = true;

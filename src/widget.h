@@ -28,4 +28,9 @@ void SetBackground(bool on);
 // Re-checks the taskbar layout and moves the widget if needed; call about once a second.
 // Returns false when the taskbar it was attached to is gone.
 bool Reposition();
+// True when the primary taskbar is docked to a vertical edge (left or right). The strip then keeps
+// its place inside the bar and stacks one small block per device.
+bool TaskbarVertical();
+// True when this widget instance uses the vertical (one block per device) layout.
+bool Vertical();
 }

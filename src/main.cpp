@@ -22,12 +22,14 @@ constexpr UINT WM_RESULTS = WM_APP + 2;
 constexpr UINT WM_WIDGET_CLICK = WM_APP + 3;
 constexpr UINT_PTR TIMER_DEBOUNCE = 1;
 constexpr UINT_PTR TIMER_WIDGET = 2;
-constexpr DWORD POLL_INTERVAL_MS = 60 * 1000;
+constexpr DWORD kDefaultIntervalMs = 60 * 1000;   // how often the receivers are asked for a level
+constexpr DWORD kMinIntervalMs = 5000;
 constexpr int LOW_BATTERY = 15;
 constexpr UINT PLACEHOLDER_ID = 1;
 
 enum MenuId : UINT {
     ID_REFRESH = 100, ID_AUTOSTART, ID_HIDE_LAST_KNOWN, ID_WIDGET_BACKGROUND, ID_EXIT, ID_MODE_WIDGET, ID_MODE_TRAY, ID_SUPPORT,
+    ID_INTERVAL_15 = 200, ID_INTERVAL_30, ID_INTERVAL_60, ID_INTERVAL_300,
     ID_DEVICE_FIRST = 1000
 };
 
@@ -46,6 +48,9 @@ bool g_wantWidget = true;      // user's choice: taskbar widget (default) or tra
 bool g_useWidget = false;      // what is actually shown right now
 bool g_hideLastKnown = false;  // hide (last known) / asleep devices from taskbar and tray
 bool g_widgetBackground = false;  // draw a plate behind the taskbar text (transparent taskbar themes)
+DWORD g_intervalMs = kDefaultIntervalMs;  // user-configurable refresh interval
+bool g_trace = false;            // --trace: append every poll to a log file (diagnosing flicker reports)
+volatile LONG g_lastCount = 0;   // devices found by the previous poll, to spot a device that went missing
 
 struct TrayEntry {
     UINT uid = 0;
@@ -54,6 +59,7 @@ struct TrayEntry {
     ULONGLONG lastSeen = 0;
     bool added = false;
     bool lowWarned = false;
+    int missStreak = 0;      // consecutive polls in which the device did not answer
     std::wstring iconSig;    // what the current icon shows, to avoid needless redraws
     HICON icon = nullptr;
 };
@@ -136,6 +142,21 @@ bool LoadHideLastKnown() { return LoadBoolSetting(L"HideLastKnownDevices", false
 void SaveHideLastKnown(bool on) { SaveBoolSetting(L"HideLastKnownDevices", on); }
 bool LoadWidgetBackground() { return LoadBoolSetting(L"WidgetBackground", false); }
 void SaveWidgetBackground(bool on) { SaveBoolSetting(L"WidgetBackground", on); }
+
+// Refresh interval, in milliseconds; clamped so a hand-edited registry value cannot turn the app
+// into a HID hammer.
+DWORD LoadIntervalMs() {
+    DWORD v = kDefaultIntervalMs, sz = sizeof(v);
+    if (RegGetValueW(HKEY_CURRENT_USER, kSettingsKey, L"UpdateIntervalMs", RRF_RT_REG_DWORD, nullptr, &v, &sz) !=
+        ERROR_SUCCESS)
+        return kDefaultIntervalMs;
+    if (v < kMinIntervalMs || v > 3600 * 1000) return kDefaultIntervalMs;
+    return v;
+}
+
+void SaveIntervalMs(DWORD ms) {
+    RegSetKeyValueW(HKEY_CURRENT_USER, kSettingsKey, L"UpdateIntervalMs", REG_DWORD, &ms, sizeof(ms));
+}
 
 bool AutostartEnabled() {
     wchar_t buf[MAX_PATH * 2];
@@ -408,19 +429,26 @@ void OnResults(std::vector<DeviceStatus>& results) {
         auto& e = g_entries[s.key];
         if (!e.uid) e.uid = StableId(s.key);
         e.st = s;
+        e.missStreak = 0;
         if (s.percent >= 0) e.lastPct = s.percent;
         e.lastSeen = GetTickCount64();
         seen[s.key] = true;
         ApplyEntry(e);
     }
+    InterlockedExchange(&g_lastCount, (LONG)results.size());
     for (auto it = g_entries.begin(); it != g_entries.end();) {
         auto& e = it->second;
         // Some receivers drop sleeping devices from the link; keep showing the last value for a while.
         bool inGrace = !seen.count(it->first) && e.st.graceSec > 0 && e.st.connected &&
                        GetTickCount64() - e.lastSeen < (ULONGLONG)e.st.graceSec * 1000;
         if (inGrace) {
-            e.st.percent = -1;
-            e.st.asleep = true;
+            // One missed answer is usually a receiver busy with input reports, not a dead device:
+            // keep the value solid and only dim it once the device really stays quiet.
+            e.missStreak++;
+            if (e.missStreak >= 2) {
+                e.st.percent = -1;
+                e.st.asleep = true;
+            }
             ApplyEntry(e);
         }
         if (!seen.count(it->first) && !inGrace) {
@@ -439,6 +467,9 @@ void OnResults(std::vector<DeviceStatus>& results) {
 // widget cannot be created (e.g. Explorer not ready yet). Called once a second.
 void Reconcile() {
     bool alive = g_wantWidget && widget::Alive();
+    // A taskbar that moved between a horizontal edge and a vertical one needs the other layout:
+    // recreate so Create() picks the right one. Both directions switch with no restart.
+    if (alive && widget::TaskbarVertical() != widget::Vertical()) { widget::Destroy(); alive = false; }
     if (g_wantWidget && !alive) alive = widget::Create(g_inst, g_hwnd, WM_WIDGET_CLICK, g_lightTaskbar);
     if (!g_wantWidget) widget::Destroy();
     bool changed = alive != g_useWidget;
@@ -456,6 +487,14 @@ void SetMode(bool useWidget) {
     g_wantWidget = useWidget;
     SaveWidgetMode(useWidget);
     Reconcile();
+}
+
+// The worker reads g_intervalMs on every wait, so storing it and waking the thread once applies the
+// new cadence immediately.
+void SetInterval(DWORD ms) {
+    g_intervalMs = ms;
+    SaveIntervalMs(ms);
+    SetEvent(g_refreshEvt);
 }
 
 void SetWidgetBackground(bool on) {
@@ -507,6 +546,16 @@ void ShowMenu() {
     UINT bgFlags = MF_STRING | (g_widgetBackground ? MF_CHECKED : 0) | (g_wantWidget ? 0 : MF_GRAYED);
     AppendMenuW(m, bgFlags, ID_WIDGET_BACKGROUND, L"Background behind taskbar text (for transparent taskbars)");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    HMENU iv = CreatePopupMenu();
+    struct { UINT id; DWORD ms; const wchar_t* label; } intervals[] = {
+        { ID_INTERVAL_15, 15 * 1000, L"Every 15 seconds" },
+        { ID_INTERVAL_30, 30 * 1000, L"Every 30 seconds" },
+        { ID_INTERVAL_60, 60 * 1000, L"Every minute" },
+        { ID_INTERVAL_300, 300 * 1000, L"Every 5 minutes" },
+    };
+    for (auto& o : intervals)
+        AppendMenuW(iv, MF_STRING | (g_intervalMs == o.ms ? MF_CHECKED : 0), o.id, o.label);
+    AppendMenuW(m, MF_POPUP, (UINT_PTR)iv, L"Update every");
     AppendMenuW(m, MF_STRING, ID_REFRESH, L"Refresh now");
     AppendMenuW(m, MF_STRING | (AutostartEnabled() ? MF_CHECKED : 0), ID_AUTOSTART, L"Start with Windows");
     AppendMenuW(m, MF_STRING, ID_SUPPORT, L"Support the project...");
@@ -520,6 +569,10 @@ void ShowMenu() {
     DestroyMenu(m);
     switch (cmd) {
         case ID_REFRESH: SetEvent(g_refreshEvt); break;
+        case ID_INTERVAL_15: SetInterval(15 * 1000); break;
+        case ID_INTERVAL_30: SetInterval(30 * 1000); break;
+        case ID_INTERVAL_60: SetInterval(60 * 1000); break;
+        case ID_INTERVAL_300: SetInterval(300 * 1000); break;
         case ID_AUTOSTART: SetAutostart(!AutostartEnabled()); break;
         case ID_HIDE_LAST_KNOWN: SetHideLastKnown(!g_hideLastKnown); break;
         case ID_WIDGET_BACKGROUND: SetWidgetBackground(!g_widgetBackground); break;
@@ -542,12 +595,53 @@ void ShowMenu() {
 
 // ---- worker thread ----------------------------------------------------------------------------
 
+// A receiver busy with input reports can miss a single status query. One quick re-read (~350 ms)
+// is much cheaper than dimming the readout for a whole interval, so missing devices get a second
+// chance before the results are published.
+std::vector<DeviceStatus> PollWithRetry() {
+    std::vector<DeviceStatus> first = PollAllDevices();
+    bool incomplete = first.empty();
+    for (auto& s : first)
+        if (s.percent < 0 && s.levelText.empty()) incomplete = true;
+    LONG known = InterlockedCompareExchange(&g_lastCount, 0, 0);
+    if (!incomplete && known > 0 && (int)first.size() < (int)known) incomplete = true;
+    if (!incomplete) return first;
+
+    Sleep(250);
+    std::vector<DeviceStatus> second = PollAllDevices();
+    std::map<std::wstring, DeviceStatus> byKey;
+    for (auto& s : second) byKey[s.key] = s;             // freshest reading wins
+    for (auto& s : first)
+        if (!byKey.count(s.key)) byKey[s.key] = s;
+    std::vector<DeviceStatus> out;
+    out.reserve(byKey.size());
+    for (auto& [k, s] : byKey) out.push_back(s);
+    return out;
+}
+
+// --trace: one line per poll in %TEMP%, so "the icon blinks" reports can be checked against what
+// the receivers actually answered.
+void TracePoll(size_t deviceCount) {
+    if (!g_trace) return;
+    wchar_t path[MAX_PATH];
+    if (!GetTempPathW(MAX_PATH, path)) return;
+    wcscat_s(path, L"wirelessbattery-trace.log");
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, path, L"a, ccs=UTF-8") != 0 || !f) return;
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    fwprintf(f, L"%02d:%02d:%02d.%03d  poll: %zu device(s)\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+             deviceCount);
+    fclose(f);
+}
+
 DWORD WINAPI Worker(LPVOID) {
     for (;;) {
-        auto* v = new std::vector<DeviceStatus>(PollAllDevices());
+        auto* v = new std::vector<DeviceStatus>(PollWithRetry());
+        TracePoll(v->size());
         if (!PostMessageW(g_hwnd, WM_RESULTS, 0, (LPARAM)v)) delete v;
         HANDLE hs[2] = { g_stopEvt, g_refreshEvt };
-        if (WaitForMultipleObjects(2, hs, FALSE, POLL_INTERVAL_MS) == WAIT_OBJECT_0) return 0;
+        if (WaitForMultipleObjects(2, hs, FALSE, g_intervalMs) == WAIT_OBJECT_0) return 0;
     }
 }
 
@@ -687,6 +781,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     g_wantWidget = LoadWidgetMode();
     g_hideLastKnown = LoadHideLastKnown();
     g_widgetBackground = LoadWidgetBackground();
+    g_intervalMs = LoadIntervalMs();
+    g_trace = cmdLine && wcsstr(cmdLine, L"--trace");
     widget::SetBackground(g_widgetBackground);  // remembered by the widget across re-creation
     LoadHidden();
     Reconcile();

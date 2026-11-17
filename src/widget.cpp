@@ -10,10 +10,11 @@ HWND g_wnd, g_taskbar, g_tip, g_notify, g_rebar;
 UINT g_clickMsg;
 bool g_light, g_hover;
 bool g_background;  // opaque rounded plate behind the text, for transparent / restyled taskbars
+bool g_vertical;    // taskbar docked to a vertical (left/right) edge: one small block per device
 std::vector<WidgetItem> g_items;
 std::wstring g_tipText;
 RECT g_lastTray{}, g_lastBar{}, g_lastWidgets{};
-int g_lastW = -1, g_lastDpi = 0, g_lastLeft = -1;
+int g_lastW = -1, g_lastDpi = 0, g_lastLeft = -1, g_lastTop = -1;
 SIZE g_size{};
 
 const wchar_t* kClass = L"WirelessBatteryWidget";
@@ -245,13 +246,62 @@ std::vector<Piece> Layout(int& width) {
     return out;
 }
 
+// One device block of the vertical layout: glyph on top, percentage underneath, both centred in the
+// taskbar's own width.
+struct VBlock {
+    Mask icon, label, bolt;
+    Rgb glyph, color, boltColor;
+    int alpha;
+};
+
 void Paint() {
     if (!g_wnd) return;
-    RECT bar;
+    RECT bar{};
     GetClientRect(g_taskbar, &bar);
-    int H = bar.bottom - bar.top;
-    int W = 0;
-    auto pieces = Layout(W);
+    if (bar.right <= bar.left || bar.bottom <= bar.top) return;
+
+    Rgb fg = g_light ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 };
+    Rgb red = g_light ? Rgb{ 196, 30, 40 } : Rgb{ 255, 90, 90 };
+    Rgb charge = g_light ? Rgb{ 0, 120, 212 } : Rgb{ 96, 205, 255 };
+
+    int W = 0, H = 0, slot = 0;
+    std::vector<Piece> pieces;  // horizontal: one row, icon + percentage per device
+    std::vector<VBlock> blocks; // vertical: one small block per device, stacked
+
+    if (g_vertical) {
+        HFONT icons = MakeFont(Px(16), FW_NORMAL, L"Segoe Fluent Icons", L"Segoe MDL2 Assets");
+        HFONT small = MakeFont(Px(11), FW_NORMAL, L"Segoe Fluent Icons", L"Segoe MDL2 Assets");
+        HFONT text = MakeFont(Px(12), FW_NORMAL, L"Segoe UI Variable Text", L"Segoe UI");
+        W = bar.right - bar.left;
+        slot = Px(34);
+        for (auto& it : g_items) {
+            VBlock b{};
+            b.icon = RenderMask(std::wstring(1, Glyph(it.kind, it.bluetooth)), icons);
+            std::wstring t = !it.text.empty() ? it.text : it.percent >= 0 ? std::to_wstring(it.percent) + L"%" : L"?";
+            b.label = RenderMask(t, text);
+            b.glyph = fg;
+            b.color = it.low ? red : fg;
+            b.boltColor = charge;
+            b.alpha = it.dim ? 120 : 255;
+            b.bolt = it.charging ? RenderMask(std::wstring(1, kBolt), small) : Mask{};
+            blocks.push_back(std::move(b));
+        }
+        if (blocks.empty()) {
+            VBlock b{};
+            b.icon = RenderMask(std::wstring(1, kBatteryUnknown), icons);
+            b.glyph = b.color = fg;
+            b.boltColor = charge;
+            b.alpha = 110;
+            blocks.push_back(std::move(b));
+        }
+        H = (int)blocks.size() * slot + Px(6);
+        DeleteObject(icons);
+        DeleteObject(small);
+        DeleteObject(text);
+    } else {
+        pieces = Layout(W);
+        H = bar.bottom - bar.top;
+    }
     if (W <= 0 || H <= 0) return;
     Canvas cv(W, H);
 
@@ -271,10 +321,20 @@ void Paint() {
     if (g_background) roundRect(Px(4), Px(6), g_light ? Rgb{ 243, 243, 243 } : Rgb{ 32, 32, 32 }, 240);
     if (g_hover) roundRect(Px(4), Px(4), g_light ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 }, g_light ? 20 : 26);
 
-    int x = Px(8);
-    for (auto& p : pieces) {
-        cv.Draw(p.m, x, (H - p.m.h) / 2, p.color, p.alpha);
-        x += p.m.w + p.gapAfter;
+    if (g_vertical) {
+        int y = Px(3);
+        for (auto& b : blocks) {
+            cv.Draw(b.icon, (W - b.icon.w) / 2, y + Px(2), b.glyph, b.alpha);
+            if (b.bolt.w) cv.Draw(b.bolt, (W + Px(2)) / 2, y + Px(1), b.boltColor, b.alpha);
+            cv.Draw(b.label, (W - b.label.w) / 2, y + Px(2) + Px(17), b.color, b.alpha);
+            y += slot;
+        }
+    } else {
+        int x = Px(8);
+        for (auto& p : pieces) {
+            cv.Draw(p.m, x, (H - p.m.h) / 2, p.color, p.alpha);
+            x += p.m.w + p.gapAfter;
+        }
     }
 
     HDC screen = GetDC(nullptr);
@@ -333,12 +393,15 @@ bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme) {
     if (!g_taskbar || !FindWindowExW(g_taskbar, nullptr, L"TrayNotifyWnd", nullptr)) { g_taskbar = nullptr; return false; }
     RECT tb;
     GetWindowRect(g_taskbar, &tb);
-    if (tb.bottom - tb.top > tb.right - tb.left) { g_taskbar = nullptr; return false; }  // vertical taskbar: use tray icons
+    // A bar docked to a vertical edge is only ~48 px wide: the strip stays inside the bar, but each
+    // device becomes a small block with the glyph on top and the percentage underneath.
+    g_vertical = (tb.bottom - tb.top) > (tb.right - tb.left);
     // Windows 11's taskbar is a XAML island; on Windows 10 the task buttons live in ReBarWindow32
     // and have to be narrowed so they never slide under the widget.
-    g_rebar = FindWindowExW(g_taskbar, nullptr, L"Windows.UI.Composition.DesktopWindowContentBridge", nullptr)
-                  ? nullptr
-                  : FindWindowExW(g_taskbar, nullptr, L"ReBarWindow32", nullptr);
+    if (!g_vertical)
+        g_rebar = FindWindowExW(g_taskbar, nullptr, L"Windows.UI.Composition.DesktopWindowContentBridge", nullptr)
+                      ? nullptr
+                      : FindWindowExW(g_taskbar, nullptr, L"ReBarWindow32", nullptr);
     g_notify = notifyWnd;
     g_clickMsg = clickMsg;
     g_light = lightTheme;
@@ -370,7 +433,7 @@ bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme) {
         SendMessageW(g_tip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
         SendMessageW(g_tip, TTM_SETMAXTIPWIDTH, 0, 600);
     }
-    WatchWidgetsButton(g_taskbar);
+    WatchWidgetsButton(g_vertical ? nullptr : g_taskbar);
     g_lastDpi = Dpi();
     Paint();
     g_lastW = -1;
@@ -391,10 +454,23 @@ void Destroy() {
     if (g_tip) { DestroyWindow(g_tip); g_tip = nullptr; }
     if (g_wnd) { DestroyWindow(g_wnd); g_wnd = nullptr; }
     g_taskbar = nullptr;
+    g_vertical = false;
+    g_lastTop = -1;
     g_hover = false;
 }
 
 bool Alive() { return g_wnd && IsWindow(g_wnd) && g_taskbar && IsWindow(g_taskbar); }
+
+bool TaskbarVertical() {
+    HWND tb = FindWindowW(L"Shell_TrayWnd", nullptr);
+    if (!tb) return false;
+    RECT r{};
+    if (!GetWindowRect(tb, &r)) return false;
+    return (r.bottom - r.top) > (r.right - r.left);
+}
+
+// True when this widget instance lays out one block per device for a vertical taskbar.
+bool Vertical() { return g_vertical; }
 
 void SetItems(const std::vector<WidgetItem>& items, const std::wstring& tooltip) {
     g_items = items;
@@ -424,6 +500,23 @@ void SetBackground(bool on) {
 bool Reposition() {
     if (!Alive()) return false;
     if (Dpi() != g_lastDpi) { g_lastDpi = Dpi(); Paint(); }
+    if (g_vertical) {
+        // Inside the bar, in the free gap just above the notification area — the vertical equivalent
+        // of sitting to the left of the clock.
+        RECT bar{}, tr{};
+        GetWindowRect(g_taskbar, &bar);
+        int top = bar.bottom - g_size.cy - Px(4);
+        HWND tray = FindWindowExW(g_taskbar, nullptr, L"TrayNotifyWnd", nullptr);
+        if (tray && GetWindowRect(tray, &tr) && tr.top - bar.top > g_size.cy) top = tr.top - g_size.cy - Px(4);
+        POINT p{ bar.left, top };
+        ScreenToClient(g_taskbar, &p);
+        if (p.x == g_lastLeft && p.y == g_lastTop && g_size.cx == g_lastW) return true;
+        g_lastLeft = p.x;
+        g_lastTop = p.y;
+        g_lastW = g_size.cx;
+        SetWindowPos(g_wnd, HWND_TOP, p.x, p.y, g_size.cx, g_size.cy, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        return true;
+    }
     HWND tray = FindWindowExW(g_taskbar, nullptr, L"TrayNotifyWnd", nullptr);
     if (!tray) return true;
     RECT tr, bar;
