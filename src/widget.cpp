@@ -1,4 +1,6 @@
 #include "widget.h"
+#include "taskbars.h"
+#include "clock_bounds.h"
 
 #include <commctrl.h>
 #include <uiautomation.h>
@@ -10,6 +12,7 @@ HWND g_wnd, g_taskbar, g_tip, g_notify, g_rebar;
 UINT g_clickMsg;
 bool g_light, g_hover;
 bool g_background;  // opaque rounded plate behind the text, for transparent / restyled taskbars
+std::wstring g_taskbarId;
 std::vector<WidgetItem> g_items;
 std::wstring g_tipText;
 RECT g_lastTray{}, g_lastBar{}, g_lastWidgets{};
@@ -112,6 +115,30 @@ void ApplyTipTheme() {
         setTheme(g_tip, g_light ? L"Explorer" : L"DarkMode_Explorer", nullptr);
         SendMessageW(g_tip, WM_THEMECHANGED, 0, 0);
     }
+}
+
+HWND FindTaskbar(const std::wstring& id) {
+    auto entries = taskbars::Enumerate();
+    const auto* selected = taskbars::Find(entries, id);
+    return selected ? selected->window : nullptr;
+}
+
+// Prefer a native notification-area/clock window, then Windows 11's UIA clock bounds.
+RECT TrayAnchor(const RECT& bar) {
+    for (const wchar_t* name : { L"TrayNotifyWnd", L"ClockButton", L"TrayClockWClass" }) {
+        HWND anchor = FindWindowExW(g_taskbar, nullptr, name, nullptr);
+        RECT r{};
+        if (anchor && IsWindowVisible(anchor) && GetWindowRect(anchor, &r) &&
+            r.right > r.left && r.left >= bar.left && r.right <= bar.right) return r;
+    }
+    RECT r{};
+    if (clock_bounds::TryGet(g_taskbar, bar, r)) return r;
+    r = bar;
+    if (GetWindowLongW(g_taskbar, GWL_EXSTYLE) & WS_EX_LAYOUTRTL)
+        r.right = std::min(bar.right, bar.left + Px(112));
+    else
+        r.left = std::max(bar.left, bar.right - Px(112));
+    return r;
 }
 
 wchar_t Glyph(DeviceKind k, bool bluetooth) {
@@ -322,12 +349,13 @@ LRESULT CALLBACK WidgetProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 
 namespace widget {
 
-bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme) {
+bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme, const std::wstring& taskbarId) {
     Destroy();
-    g_taskbar = FindWindowW(L"Shell_TrayWnd", nullptr);
-    if (!g_taskbar || !FindWindowExW(g_taskbar, nullptr, L"TrayNotifyWnd", nullptr)) { g_taskbar = nullptr; return false; }
-    RECT tb;
-    GetWindowRect(g_taskbar, &tb);
+    g_taskbarId = taskbarId;
+    g_taskbar = FindTaskbar(taskbarId);
+    if (!g_taskbar) return false;
+    RECT tb{};
+    if (!GetWindowRect(g_taskbar, &tb)) { g_taskbar = nullptr; return false; }
     if (tb.bottom - tb.top > tb.right - tb.left) { g_taskbar = nullptr; return false; }  // vertical taskbar: use tray icons
     // Windows 11's taskbar is a XAML island; on Windows 10 the task buttons live in ReBarWindow32
     // and have to be narrowed so they never slide under the widget.
@@ -369,12 +397,13 @@ bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme) {
     g_lastDpi = Dpi();
     Paint();
     g_lastW = -1;
-    Reposition();
+    if (!Reposition()) { Destroy(); return false; }
     ShowWindow(g_wnd, SW_SHOWNOACTIVATE);
     return true;
 }
 
 void Destroy() {
+    clock_bounds::Invalidate();
     if (g_rebar && IsWindow(g_rebar) && g_taskbar && IsWindow(g_taskbar)) {
         // Let Explorer lay the task buttons out again over the full width.
         RECT r;
@@ -387,9 +416,13 @@ void Destroy() {
     if (g_wnd) { DestroyWindow(g_wnd); g_wnd = nullptr; }
     g_taskbar = nullptr;
     g_hover = false;
+    g_tipText.clear();  // the new tooltip must be populated even when the device list is unchanged
 }
 
-bool Alive() { return g_wnd && IsWindow(g_wnd) && g_taskbar && IsWindow(g_taskbar); }
+bool Alive() {
+    return g_wnd && IsWindow(g_wnd) && g_taskbar && IsWindow(g_taskbar) &&
+           g_taskbar == FindTaskbar(g_taskbarId);
+}
 
 void SetItems(const std::vector<WidgetItem>& items, const std::wstring& tooltip) {
     g_items = items;
@@ -418,12 +451,11 @@ void SetBackground(bool on) {
 
 bool Reposition() {
     if (!Alive()) return false;
-    if (Dpi() != g_lastDpi) { g_lastDpi = Dpi(); Paint(); }
-    HWND tray = FindWindowExW(g_taskbar, nullptr, L"TrayNotifyWnd", nullptr);
-    if (!tray) return true;
-    RECT tr, bar;
-    GetWindowRect(tray, &tr);
-    GetWindowRect(g_taskbar, &bar);
+    RECT bar{};
+    if (!GetWindowRect(g_taskbar, &bar) || bar.bottom <= bar.top ||
+        bar.bottom - bar.top > bar.right - bar.left) return false;
+    if (Dpi() != g_lastDpi || bar.bottom - bar.top != g_size.cy) { g_lastDpi = Dpi(); Paint(); }
+    RECT tr = TrayAnchor(bar);
     // Right-to-left Windows (Hebrew, Arabic) mirrors the taskbar: client x runs from the screen's right
     // edge, so a window's client-space left edge is its screen-space right edge.
     bool rtl = GetWindowLongW(g_taskbar, GWL_EXSTYLE) & WS_EX_LAYOUTRTL;
@@ -442,7 +474,7 @@ bool Reposition() {
         edge = rtl ? wb.right : wb.left;
     POINT p{ edge, bar.top };
     ScreenToClient(g_taskbar, &p);
-    int left = p.x - g_size.cx - Px(2);
+    int left = std::max(0L, p.x - g_size.cx - Px(2));
 
 
     // Optional user override in DPI-independent pixels (e.g. for custom padding).

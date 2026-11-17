@@ -25,6 +25,8 @@ Battery levels of your wireless mouse, headset, keyboard and controller, right o
 
 Hover for details. Click for the menu: every device (click one to hide or show it), display mode, *Refresh now*, *Start with Windows*, and *Exit*. Levels refresh every 60 seconds, and right away when a device is plugged in or the PC wakes up.
 
+**Choose a taskbar:** right-click the widget → **Taskbar display**, then select a taskbar.
+
 ## Supported devices
 
 | Vendor | Devices | How |
@@ -137,7 +139,6 @@ just lose the extra headsets.
 
 ## Limitations
 
-- **Primary monitor only:** the taskbar widget sits on the primary monitor's taskbar.
 - **Crowded taskbars:** with a very full centered Windows 11 taskbar, the app buttons can reach the widget. On Windows 10 the task-button area is narrowed automatically.
 - **Phones:** read from a file Phone Link writes for the Start menu companion card, which is not a documented API and may change with Phone Link updates. The phone shows while Phone Link reports it as connected; a card older than 3 hours is shown dimmed. Charging state is not available there.
 - **Sleeping devices:** a device that is asleep may not answer. Its last value stays visible, dimmed. Logitech receivers drop sleeping devices from the link, so their last value is kept for 30 minutes.
@@ -153,7 +154,7 @@ just lose the extra headsets.
 
 Each vendor driver in [`src/drivers/`](src/drivers) recognises its devices by USB vendor and product ID, and only ever sends read-only battery queries. Unknown devices are never written to. The generic fallbacks (HID battery usage, Bluetooth, XInput, HeadsetControl) only look at devices no vendor driver has claimed.
 
-The taskbar widget is a layered child window of `Shell_TrayWnd`, placed left of `TrayNotifyWnd`. If Explorer restarts, it is re-created.
+The taskbar widget is a layered child window of `Shell_TrayWnd` or `Shell_SecondaryTrayWnd`, placed left of the notification area or clock. The clock's position is read through Win32 or UI Automation, with fixed spacing as a fallback. If Explorer restarts or the selected taskbar changes, the widget is re-created.
 
 ## Credits
 

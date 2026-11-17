@@ -14,6 +14,7 @@
 
 #include "devices.h"
 #include "widget.h"
+#include "taskbars.h"
 
 namespace {
 
@@ -46,6 +47,7 @@ bool g_wantWidget = true;      // user's choice: taskbar widget (default) or tra
 bool g_useWidget = false;      // what is actually shown right now
 bool g_hideLastKnown = false;  // hide (last known) / asleep devices from taskbar and tray
 bool g_widgetBackground = false;  // draw a plate behind the taskbar text (transparent taskbar themes)
+std::wstring g_taskbarId;
 
 struct TrayEntry {
     UINT uid = 0;
@@ -136,6 +138,20 @@ bool LoadHideLastKnown() { return LoadBoolSetting(L"HideLastKnownDevices", false
 void SaveHideLastKnown(bool on) { SaveBoolSetting(L"HideLastKnownDevices", on); }
 bool LoadWidgetBackground() { return LoadBoolSetting(L"WidgetBackground", false); }
 void SaveWidgetBackground(bool on) { SaveBoolSetting(L"WidgetBackground", on); }
+std::wstring LoadTaskbarId() {
+    DWORD bytes = 0;
+    if (RegGetValueW(HKEY_CURRENT_USER, kSettingsKey, L"TaskbarDisplay", RRF_RT_REG_SZ, nullptr, nullptr, &bytes) == ERROR_SUCCESS && bytes) {
+        std::vector<wchar_t> value(bytes / sizeof(wchar_t) + 1, 0);
+        if (RegGetValueW(HKEY_CURRENT_USER, kSettingsKey, L"TaskbarDisplay", RRF_RT_REG_SZ, nullptr, value.data(), &bytes) == ERROR_SUCCESS)
+            return value.data();
+    }
+    return L"";
+}
+
+void SaveTaskbarId(const std::wstring& id) {
+    RegSetKeyValueW(HKEY_CURRENT_USER, kSettingsKey, L"TaskbarDisplay", REG_SZ,
+                   id.c_str(), (DWORD)((id.size() + 1) * sizeof(wchar_t)));
+}
 
 bool AutostartEnabled() {
     wchar_t buf[MAX_PATH * 2];
@@ -438,17 +454,27 @@ void OnResults(std::vector<DeviceStatus>& results) {
 // Makes the actual display match the chosen mode; falls back to tray icons if the taskbar
 // widget cannot be created (e.g. Explorer not ready yet). Called once a second.
 void Reconcile() {
-    bool alive = g_wantWidget && widget::Alive();
-    if (g_wantWidget && !alive) alive = widget::Create(g_inst, g_hwnd, WM_WIDGET_CLICK, g_lightTaskbar);
+    // Resolve the initial primary default once, then pin the monitor identity, not an index.
+    if (g_taskbarId.empty()) {
+        auto entries = taskbars::Enumerate();
+        if (const auto* target = taskbars::Find(entries, g_taskbarId)) {
+            g_taskbarId = target->id;
+            SaveTaskbarId(g_taskbarId);
+        }
+    }
+    bool alive = g_wantWidget && widget::Reposition();
+    bool recreated = false;
+    if (g_wantWidget && !alive) {
+        alive = widget::Create(g_inst, g_hwnd, WM_WIDGET_CLICK, g_lightTaskbar, g_taskbarId);
+        recreated = alive;
+    }
     if (!g_wantWidget) widget::Destroy();
     bool changed = alive != g_useWidget;
     g_useWidget = alive;
-    if (changed) {
+    if (changed || recreated) {
         for (auto& [k, e] : g_entries) ApplyEntry(e);
         UpdatePlaceholder();
         UpdateWidget();
-    } else if (g_useWidget) {
-        widget::Reposition();
     }
 }
 
@@ -462,6 +488,13 @@ void SetWidgetBackground(bool on) {
     g_widgetBackground = on;
     SaveWidgetBackground(on);
     widget::SetBackground(on);
+}
+
+void SetTaskbar(const std::wstring& id) {
+    g_taskbarId = id;
+    SaveTaskbarId(id);
+    widget::Destroy();
+    SetMode(true);
 }
 
 void SetHideLastKnown(bool on) {
@@ -506,6 +539,11 @@ void ShowMenu() {
     CheckMenuRadioItem(m, ID_MODE_WIDGET, ID_MODE_TRAY, g_wantWidget ? ID_MODE_WIDGET : ID_MODE_TRAY, MF_BYCOMMAND);
     UINT bgFlags = MF_STRING | (g_widgetBackground ? MF_CHECKED : 0) | (g_wantWidget ? 0 : MF_GRAYED);
     AppendMenuW(m, bgFlags, ID_WIDGET_BACKGROUND, L"Background behind taskbar text (for transparent taskbars)");
+    // Keep this snapshot alive until the menu closes: hot-plug may reorder enumeration.
+    auto taskbarEntries = taskbars::Enumerate();
+    UINT taskbarFirst = ID_DEVICE_FIRST + (UINT)keys.size();
+    HMENU displays = taskbars::CreateMenu(taskbarEntries, g_taskbarId, taskbarFirst);
+    AppendMenuW(m, MF_POPUP, (UINT_PTR)displays, L"Taskbar display");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING, ID_REFRESH, L"Refresh now");
     AppendMenuW(m, MF_STRING | (AutostartEnabled() ? MF_CHECKED : 0), ID_AUTOSTART, L"Start with Windows");
@@ -526,7 +564,9 @@ void ShowMenu() {
         case ID_MODE_TRAY: SetMode(false); break;
         case ID_EXIT: DestroyWindow(g_hwnd); break;
         default:
-            if (cmd >= ID_DEVICE_FIRST && cmd < ID_DEVICE_FIRST + keys.size()) {
+            if (cmd >= taskbarFirst && cmd < taskbarFirst + taskbarEntries.size()) {
+                SetTaskbar(taskbarEntries[cmd - taskbarFirst].id);
+            } else if (cmd >= ID_DEVICE_FIRST && cmd < ID_DEVICE_FIRST + keys.size()) {
                 const std::wstring& key = keys[cmd - ID_DEVICE_FIRST];
                 if (!g_hidden.erase(key)) g_hidden.insert(key);
                 SaveHidden();
@@ -683,6 +723,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     g_refreshEvt = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     g_stopEvt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_wantWidget = LoadWidgetMode();
+    g_taskbarId = LoadTaskbarId();
     g_hideLastKnown = LoadHideLastKnown();
     g_widgetBackground = LoadWidgetBackground();
     widget::SetBackground(g_widgetBackground);  // remembered by the widget across re-creation
