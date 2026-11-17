@@ -35,6 +35,7 @@ Hover for details. Click for the menu: every device (click one to hide or show i
 | **Cooler Master** | MM712, MM731 (2.4 GHz dongle or USB cable) | Vendor HID status report (read-only) |
 | **HyperX** | Cloud III Wireless, Cloud III S Wireless, Cloud II Wireless (HP, Kingston, DTS), Cloud II Core Wireless, Cloud Alpha Wireless, Cloud Alpha 2 Wireless, Cloud Flight, Cloud Flight S | Vendor HID reports |
 | **Glorious** | Model O / O- / D / D- Wireless, Model O 2 / D 2 PRO | Vendor feature report |
+| **VAXEE / ZYGEN**                         | XE / XE-S / XE V2 / AX / E1 / Sora and ZYGEN NP-01 family Wireless, on the 2.4 GHz receivers (incl. the 4K receiver) or by cable                          | Vendor feature report 0E (battery in 5 % steps, charging)                            |
 | **Hitscan** | Hyperlight X, Hyperlight N | Vendor feature report (same protocol as Glorious) |
 | **Kysona / Pulsar / ATK (VXE) / Hitscan** | Kysona M600 / Mercury, Pulsar and ATK VXE wireless mice (e.g. VXE X3 Pro, ATK F1 Extreme), Hitscan Hyperlight | Shared vendor protocol with checksummed replies |
 | **ATK headsets** | ATK N9 Pro | Virtual COM port protocol (the ATK desktop app must be closed) |
@@ -136,6 +137,7 @@ The protocols come from these projects' research:
 - [zowie-battery](https://github.com/yleshchuk/zowie-battery) and [zowie-battery-tray](https://github.com/IgnacioBarb/zowie-battery-tray): ZOWIE EC-CW and DW
 - [LGSTrayBattery-MotospeedX6](https://github.com/Jacobz888/LGSTrayBattery-MotospeedX6), [omarchy-delux-m900](https://github.com/AeonArcHQ/omarchy-delux-m900), [aj179-linux](https://github.com/Rockeyxx/aj179-linux): Motospeed, Delux, Ajazz
 - OpenRazer PR #2794 and [omarchy-blackshark-v3](https://github.com/ReedME/omarchy-blackshark-v3): BlackShark V3
+- [mousepulse](https://github.com/ToooAir/mousepulse), [mousebatt](https://github.com/ryanlewis/mousebatt) and [mouse-battery-monitor](https://github.com/stuffz/mouse-battery-monitor): VAXEE
 - [HyperXWM](https://github.com/Medprj/HyperXWM): HyperX Cloud III Wireless
 - [HyperHeadset](https://github.com/LennardKittner/HyperHeadset): HyperX Cloud III S, Cloud II Core, Cloud Flight S
 - [BatteryTray](https://github.com/qu1ncky/BatteryTray): Rongyuan and Xenta receivers (Attack Shark and others)
