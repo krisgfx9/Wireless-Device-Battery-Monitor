@@ -70,6 +70,7 @@ std::vector<DeviceStatus> PollAllDevices() {
     PollSonix(ctx);
     PollSemico(ctx);
     PollSonyInzone(ctx);
+    PollPlayStationLink(ctx);
     PollFractal(ctx);
     PollJabra(ctx);
     PollJbl(ctx);
