@@ -4,6 +4,7 @@
 
 #include <commctrl.h>
 #include <uiautomation.h>
+#include <tlhelp32.h>
 #include <algorithm>
 #include <climits>
 
@@ -39,6 +40,28 @@ std::vector<Mirror> g_mirrors;
 std::wstring g_choice = L"all";
 bool g_primaryHidden = false;
 HWND g_dpiBar;  // while a mirror is painted or placed, Px() uses its taskbar's DPI
+
+// TaskbarX repositions Windows 10 taskbar controls. Our widget normally narrows
+// ReBarWindow32 to reserve space; doing that while TaskbarX is running can race
+// its layout updates and corrupt the taskbar geometry. In that case, use tray icons.
+bool TaskbarXRunning() {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return false;
+
+    PROCESSENTRY32W entry{ sizeof(entry) };
+    bool found = false;
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (_wcsicmp(entry.szExeFile, L"TaskbarX.exe") == 0 ||
+                _wcsicmp(entry.szExeFile, L"FalconX.exe") == 0) {
+                found = true;
+                break;
+            }
+        } while (Process32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+    return found;
+}
 
 const wchar_t* kClass = L"WirelessBatteryWidget";
 
@@ -797,6 +820,7 @@ namespace widget {
 
 bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme) {
     Destroy();
+    if (TaskbarXRunning()) return false;  // safe fallback: tray icons, no taskbar geometry changes
     g_taskbar = FindWindowW(L"Shell_TrayWnd", nullptr);
     if (!g_taskbar || !FindWindowExW(g_taskbar, nullptr, L"TrayNotifyWnd", nullptr)) { g_taskbar = nullptr; return false; }
     RECT tb;
