@@ -24,6 +24,7 @@ Move up =
 Move right = 
 Move down = 
 Hide last known / asleep devices = 
+Keep last known battery for mice =
 Show on the taskbar (icon + percentage) = 
 Show as tray icons = 
 Background behind taskbar text (for transparent taskbars) = 

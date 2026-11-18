@@ -114,6 +114,9 @@ DeviceKind Kind(const std::vector<HidColl>& colls, USHORT vid, USHORT pid) {
 }  // namespace
 
 void PollRazer(PollContext& ctx) {
+    constexpr USHORT viperCable = 0x00A5, viperReceiver = 0x00A6;
+    DeviceStatus viper;
+    USHORT viperPid = 0;
     std::vector<std::wstring> seenNames;
     for (auto [vid, pid] : ctx.Products(0x1532)) {
         for (const HidColl* c : ctx.Find(vid, pid, [](const HidColl& c) { return c.featLen() == 91; })) {
@@ -148,6 +151,25 @@ void PollRazer(PollContext& ctx) {
                 std::vector<BYTE> ch;
                 if (Command(d, tid, 0x07, 0x84, 0x02, ch) == Rz::Ok) s.charging = ch[1] == 1;
             }
+            if (pid == viperCable || pid == viperReceiver) {
+                // The Viper V2 Pro changes PID between USB and its stock receiver. Keep the
+                // receiver key in both modes so the cached reading survives a cable change.
+                s.key = L"razer:" + Hex4(viperReceiver);
+                s.via = pid == viperCable ? L"USB cable" : L"Razer receiver";
+                if (pid == viperReceiver && res == Rz::Offline) {
+                    s.asleep = true;
+                    s.connected = true;  // The receiver reports the same timeout for sleep and power-off.
+                }
+                // Prefer a live reading, using the cable if both are live. With no reading,
+                // use the receiver's asleep state over an offline cable endpoint.
+                if (!viperPid || (s.percent >= 0 && (viper.percent < 0 || pid == viperCable)) ||
+                    (s.percent < 0 && viper.percent < 0 && pid == viperReceiver)) {
+                    viper = s;
+                    viperPid = pid;
+                }
+                ctx.Claim(vid, pid);
+                break;
+            }
             // A wireless mouse plugged in for charging shows up twice (cable + dongle); keep one.
             bool dup = false;
             for (auto& n : seenNames) dup |= n == s.name;
@@ -162,4 +184,5 @@ void PollRazer(PollContext& ctx) {
             break;
         }
     }
+    if (viperPid) ctx.Add(viper, 0x1532, viperPid);
 }
