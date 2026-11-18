@@ -1,5 +1,7 @@
 // SONiX keyboards on their 2.4 GHz dongle: AJAZZ AK820 MAX ("AJAZZ AK820 MAX 2.4G", 05AC:024F, tested),
-// AULA F108 Pro (same 05AC:024F dongle) and AJAZZ AK980 V2 (0C45:FEFE). The dongle reuses Apple's
+// AULA F108 Pro (same 05AC:024F dongle), AJAZZ AK980 V2 (0C45:FEFE) and AJAZZ AK820 Pro (0C45:FDFD,
+// device request #2515; same vendor id and the same if3 FF60:0061 33-byte collection as the AK980 V2,
+// untested on hardware). The dongle reuses Apple's
 // vendor id, so it is also matched by its vendor collection: interface 3, usage page FF60 / usage 61,
 // 33-byte input and output reports (report id 0 + 32 bytes).
 //   request [20 01 00 ... sum]          sum = byte sum of the 31 bytes before it
@@ -10,7 +12,7 @@
 
 namespace {
 
-const std::pair<USHORT, USHORT> kDongles[] = { { 0x05AC, 0x024F }, { 0x0C45, 0xFEFE } };
+const std::pair<USHORT, USHORT> kDongles[] = { { 0x05AC, 0x024F }, { 0x0C45, 0xFEFE }, { 0x0C45, 0xFDFD } };
 
 const size_t kLen = 32;  // payload bytes after the report id; the last one is the checksum
 
@@ -44,7 +46,7 @@ int QueryLevel(HidDev& d) {
 std::wstring KeyboardName(const HidColl& c) {
     std::wstring name = HidProduct(c);
     const std::wstring suffix = L" 2.4G";
-    if (name.size() > suffix.size() && name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0)
+    if (name.size() > suffix.size() && name.compare(name.size() - suffix.size(), suffix.size()) == 0)
         name.resize(name.size() - suffix.size());
     return name.empty() ? L"Wireless keyboard" : name;
 }
