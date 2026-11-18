@@ -15,6 +15,7 @@ UINT g_clickMsg;
 bool g_light, g_hover;
 bool g_background;  // opaque rounded plate behind the text, for transparent / restyled taskbars
 bool g_taskbarxExperimental;  // opt-in: allow widget with TaskbarX, without resizing the task-button area
+bool g_taskbarxAtCreate;      // whether TaskbarX was running when the current widget was created
 bool g_stacked;     // icon above the percentage (menu option, PR #525)
 bool g_vertical;    // the primary taskbar is docked left or right: one block per device, stacked (PR #321)
 std::vector<WidgetItem> g_items;
@@ -823,6 +824,7 @@ bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme) {
     Destroy();
     bool taskbarx = TaskbarXRunning();
     if (taskbarx && !g_taskbarxExperimental) return false;  // safe default: tray icons
+    g_taskbarxAtCreate = taskbarx;
     g_taskbar = FindWindowW(L"Shell_TrayWnd", nullptr);
     if (!g_taskbar || !FindWindowExW(g_taskbar, nullptr, L"TrayNotifyWnd", nullptr)) { g_taskbar = nullptr; return false; }
     RECT tb;
@@ -893,9 +895,14 @@ void Destroy() {
     if (g_wnd) { DestroyWindow(g_wnd); g_wnd = nullptr; }
     g_taskbar = nullptr;
     g_hover = false;
+    g_taskbarxAtCreate = false;
 }
 
-bool Alive() { return (!TaskbarXRunning() || g_taskbarxExperimental) && g_wnd && IsWindow(g_wnd) && g_taskbar && IsWindow(g_taskbar); }
+bool Alive() {
+    bool taskbarx = TaskbarXRunning();
+    return taskbarx == g_taskbarxAtCreate && (!taskbarx || g_taskbarxExperimental) &&
+           g_wnd && IsWindow(g_wnd) && g_taskbar && IsWindow(g_taskbar);
+}
 
 void SetTaskbarXExperimental(bool on) { g_taskbarxExperimental = on; }
 
