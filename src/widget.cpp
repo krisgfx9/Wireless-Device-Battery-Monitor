@@ -14,6 +14,7 @@ HWND g_wnd, g_taskbar, g_tip, g_notify, g_rebar;
 UINT g_clickMsg;
 bool g_light, g_hover;
 bool g_background;  // opaque rounded plate behind the text, for transparent / restyled taskbars
+bool g_taskbarxExperimental;  // opt-in: allow widget with TaskbarX, without resizing the task-button area
 bool g_stacked;     // icon above the percentage (menu option, PR #525)
 bool g_vertical;    // the primary taskbar is docked left or right: one block per device, stacked (PR #321)
 std::vector<WidgetItem> g_items;
@@ -820,7 +821,8 @@ namespace widget {
 
 bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme) {
     Destroy();
-    if (TaskbarXRunning()) return false;  // safe fallback: tray icons, no taskbar geometry changes
+    bool taskbarx = TaskbarXRunning();
+    if (taskbarx && !g_taskbarxExperimental) return false;  // safe default: tray icons
     g_taskbar = FindWindowW(L"Shell_TrayWnd", nullptr);
     if (!g_taskbar || !FindWindowExW(g_taskbar, nullptr, L"TrayNotifyWnd", nullptr)) { g_taskbar = nullptr; return false; }
     RECT tb;
@@ -828,9 +830,11 @@ bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme) {
     g_vertical = tb.bottom - tb.top > tb.right - tb.left;  // left / right taskbar: devices stacked in a column
     // Windows 11's taskbar is a XAML island; on Windows 10 the task buttons live in ReBarWindow32
     // and have to be narrowed so they never slide under the widget.
-    g_rebar = FindWindowExW(g_taskbar, nullptr, L"Windows.UI.Composition.DesktopWindowContentBridge", nullptr)
+    // Experimental TaskbarX mode: draw the widget beside the tray, but do not resize
+    // ReBarWindow32. This avoids competing with TaskbarX's layout; overlap is possible.
+    g_rebar = taskbarx ? nullptr : (FindWindowExW(g_taskbar, nullptr, L"Windows.UI.Composition.DesktopWindowContentBridge", nullptr)
                   ? nullptr
-                  : FindWindowExW(g_taskbar, nullptr, L"ReBarWindow32", nullptr);
+                  : FindWindowExW(g_taskbar, nullptr, L"ReBarWindow32", nullptr));
     g_notify = notifyWnd;
     g_clickMsg = clickMsg;
     g_light = lightTheme;
@@ -891,7 +895,9 @@ void Destroy() {
     g_hover = false;
 }
 
-bool Alive() { return !TaskbarXRunning() && g_wnd && IsWindow(g_wnd) && g_taskbar && IsWindow(g_taskbar); }
+bool Alive() { return (!TaskbarXRunning() || g_taskbarxExperimental) && g_wnd && IsWindow(g_wnd) && g_taskbar && IsWindow(g_taskbar); }
+
+void SetTaskbarXExperimental(bool on) { g_taskbarxExperimental = on; }
 
 void SetItems(const std::vector<WidgetItem>& items, const std::wstring& tooltip) {
     g_items = items;
