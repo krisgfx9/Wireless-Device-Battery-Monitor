@@ -14,6 +14,8 @@ struct DeviceStatus {
     std::wstring detail;       // extra breakdown for the tooltip, e.g. "L 80%, R 75%, case 40%"
     std::wstring levelText;    // set when the device only reports coarse levels ("Low", "Full"...)
     bool charging   = false;
+    bool usbConnected = false;  // USB/cable transport icon (bolt); independent of charging
+    bool wirelessLink = false;  // 2.4 GHz transport icon; mutually exclusive with the bolt in the widget
     bool asleep     = false;   // receiver answered but the device is sleeping (keep last value)
     bool connected  = true;    // false: receiver present, device switched off (hidden)
     int  millivolts = 0;       // battery voltage when reported (0 = unknown)

@@ -13,6 +13,8 @@ struct WidgetItem {
     int  percent  = -1;     // -1 = unknown
     std::wstring text;      // shown instead of the percentage when set (coarse levels like "Low")
     bool charging = false;
+    bool usbConnected = false;  // bolt for USB/cable transport without implying charging
+    bool wirelessLink = false;  // compact 2.4 GHz indicator (not drawn together with the bolt)
     bool dim      = false;  // asleep / stale value
     bool low      = false;
     bool bluetooth = false;  // picks the Bluetooth icon when the device type is unknown

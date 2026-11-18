@@ -239,6 +239,7 @@ wchar_t Glyph(DeviceKind k, bool bluetooth) {
     }
 }
 constexpr wchar_t kBolt = 0xE945;            // LightningBolt
+constexpr wchar_t kWifi = 0xE701;             // Wifi (Segoe Fluent Icons / MDL2 — same chart as Bluetooth E702)
 constexpr wchar_t kBatteryUnknown = 0xE996;  // shown when there is nothing to display
 
 // Creates a font, falling back when the preferred face is not installed (GDI would silently substitute).
@@ -398,7 +399,8 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
         int a = it.dim ? 120 : 255;
         Rgb tc = it.low ? red : fg;
         size_t glyph = out.size();
-        slots.push_back({ (int)glyph, (int)glyph + 1, it.charging ? (int)glyph + 2 : -1 });
+        const bool trailing = it.charging || it.usbConnected || it.wirelessLink;
+        slots.push_back({ (int)glyph, (int)glyph + 1, trailing ? (int)glyph + 2 : -1 });
         bool branded = it.accent != Accent::None;
         BrandColor bc = AccentColor(it.accent, g_light);
         Rgb accent{ bc.r, bc.g, bc.b };
@@ -410,13 +412,18 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
         }
         out.push_back(std::move(icon));
         std::wstring t = !it.text.empty() ? it.text : it.percent >= 0 ? std::to_wstring(it.percent) + L"%" : L"?";
-        Piece label{ RenderMask(t, text, g_light), tc, a, it.charging ? Px(2) : 0 };
+        const bool showBolt = it.charging || it.usbConnected;
+        const bool showWireless = !showBolt && it.wirelessLink;
+        Piece label{ RenderMask(t, text, g_light), tc, a, (showBolt || showWireless) ? Px(2) : 0 };
         if (branded && it.percent >= 0) {
             label.barPct = it.percent;
             label.barColor = it.low ? red : accent;
         }
         out.push_back(std::move(label));
-        if (it.charging) out.push_back({ RenderMask(std::wstring(1, kBolt), bolt, g_light), charge, a, 0 });
+        if (showBolt)
+            out.push_back({ RenderMask(std::wstring(1, kBolt), bolt, g_light), charge, a, 0 });
+        else if (showWireless)
+            out.push_back({ RenderMask(std::wstring(1, kWifi), bolt, g_light), charge, a, 0 });
         out.back().gapAfter = i + 1 < g_items.size() ? Px(14) : 0;
         if (!it.label.empty()) {  // tiny caption in the bottom-right corner of the icon
             Piece c{ RenderMask(it.label, caption, g_light), fg, a, 0 };
