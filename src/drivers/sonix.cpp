@@ -10,7 +10,9 @@
 
 namespace {
 
-const std::pair<USHORT, USHORT> kDongles[] = { { 0x05AC, 0x024F }, { 0x0C45, 0xFEFE } };
+// iface < 0: match the vendor collection on any interface (interface numbering is a descriptor detail).
+struct Dongle { USHORT vid, pid; int iface; };
+const Dongle kDongles[] = { { 0x05AC, 0x024F, 3 }, { 0x0C45, 0xFEFE, 3 }, { 0x36B0, 0x3002, -1 } };
 
 const size_t kLen = 32;  // payload bytes after the report id; the last one is the checksum
 
@@ -52,11 +54,11 @@ std::wstring KeyboardName(const HidColl& c) {
 }  // namespace
 
 void PollSonix(PollContext& ctx) {
-    for (auto [vid, pid] : kDongles) {
-        if (ctx.IsClaimed(vid, pid)) continue;
-        for (const HidColl* c : ctx.Find(vid, pid, [](const HidColl& c) {
-                 return c.iface == 3 && c.page() == 0xFF60 && c.usage() == 0x0061 && c.outLen() == 1 + kLen &&
-                        c.inLen() == 1 + kLen;
+    for (const Dongle& m : kDongles) {
+        if (ctx.IsClaimed(m.vid, m.pid)) continue;
+        for (const HidColl* c : ctx.Find(m.vid, m.pid, [&m](const HidColl& c) {
+                 return (m.iface < 0 || c.iface == m.iface) && c.page() == 0xFF60 && c.usage() == 0x0061 &&
+                        c.outLen() == 1 + kLen && c.inLen() == 1 + kLen;
              })) {
             HidDev d;
             if (!d.Open(*c)) continue;
@@ -65,14 +67,14 @@ void PollSonix(PollContext& ctx) {
             if (level < 0) level = QueryLevel(d);
             if (level < 0) continue;
             DeviceStatus s;
-            s.key = L"sonix:" + Hex4(vid) + L":" + Hex4(pid);
+            s.key = L"sonix:" + Hex4(m.vid) + L":" + Hex4(m.pid);
             s.name = KeyboardName(*c);
             s.kind = DeviceKind::Keyboard;
             s.via = L"2.4 GHz receiver";
             s.connected = level >= 1 && level <= 100;  // 0: keyboard off, out of range or in another mode
             if (s.connected) s.percent = level;
             s.graceSec = 1800;  // keep the last value if a sleeping keyboard stops answering
-            ctx.Add(s, vid, pid);
+            ctx.Add(s, m.vid, m.pid);
             break;
         }
     }
