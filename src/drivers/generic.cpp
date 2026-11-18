@@ -131,9 +131,9 @@ std::wstring ContainerOf(const std::wstring& path) {
     SetupDiDestroyDeviceInfoList(di);
     return result;
 }
-std::wstring HidContainer(const std::wstring& path) { return ContainerOf(path); }
-
 }  // namespace
+
+std::wstring HidContainer(const std::wstring& path) { return ContainerOf(path); }
 
 void PollGenericHid(PollContext& ctx) {
     // Drawing tablets and pen displays (any collection on the Digitizers page 0D) are never read:

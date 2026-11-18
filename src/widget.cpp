@@ -238,7 +238,6 @@ wchar_t Glyph(DeviceKind k, bool bluetooth) {
         default:                   return bluetooth ? 0xE702 : 0xE772;  // Bluetooth / Devices
     }
 }
-constexpr wchar_t kBolt = 0xE945;            // LightningBolt
 constexpr wchar_t kBatteryUnknown = 0xE996;  // shown when there is nothing to display
 
 // Creates a font, falling back when the preferred face is not installed (GDI would silently substitute).
@@ -322,8 +321,9 @@ struct Canvas {
         int ob = c.b * a / 255 + db * inv / 255;
         px[y * w + x] = ((DWORD)oa << 24) | ((DWORD)orr << 16) | ((DWORD)og << 8) | (DWORD)ob;
     }
-    void Draw(const Mask& m, int x, int y, Rgb c, int alpha) {
-        for (int j = 0; j < m.h; j++)
+    void Draw(const Mask& m, int x, int y, Rgb c, int alpha, int rowsTo = -1, int rowsFrom = 0) {  // rows [rowsFrom, rowsTo)
+        if (rowsTo < 0 || rowsTo > m.h) rowsTo = m.h;
+        for (int j = rowsFrom; j < rowsTo; j++)
             for (int i = 0; i < m.w; i++) Blend(x + i, y + j, c, m.a[j * m.w + i] * alpha / 255);
     }
 };
@@ -372,6 +372,7 @@ struct Piece {
     Mask halo;        // glow drawn behind the glyph (branded devices)
     int haloR = 0, haloAlpha = 0;
     int px = INT_MIN, py = 0;  // fixed top-left position (stacked and vertical layouts); INT_MIN = flow left to right
+    bool charging = false;     // glyph fills green from the bottom in a loop
 };
 
 // Three arrangements of the same pieces:
@@ -383,14 +384,12 @@ struct Piece {
 std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
     Rgb fg = g_light ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 };
     Rgb red = g_light ? Rgb{ 196, 30, 40 } : Rgb{ 255, 90, 90 };
-    Rgb charge = g_light ? Rgb{ 0, 120, 212 } : Rgb{ 96, 205, 255 };
     HFONT icons = MakeFont(Px(16), FW_NORMAL, L"Segoe Fluent Icons", L"Segoe MDL2 Assets");
-    HFONT bolt = MakeFont(Px(11), FW_NORMAL, L"Segoe Fluent Icons", L"Segoe MDL2 Assets");
     HFONT text = MakeFont(Px(13), FW_NORMAL, L"Segoe UI Variable Text", L"Segoe UI", Px(12));
     HFONT caption = MakeFont(std::max(8, Px(7)), FW_SEMIBOLD, L"Segoe UI Variable Text", L"Segoe UI");  // never under 8 px
 
     std::vector<Piece> out;
-    struct Slot { int icon, label, bolt; };  // indices of one device's pieces
+    struct Slot { int icon, label; };  // indices of one device's pieces
     std::vector<Slot> slots;
     if (g_items.empty()) out.push_back({ RenderMask(std::wstring(1, kBatteryUnknown), icons, g_light), fg, 110, 0 });
     for (size_t i = 0; i < g_items.size(); i++) {
@@ -398,7 +397,7 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
         int a = it.dim ? 120 : 255;
         Rgb tc = it.low ? red : fg;
         size_t glyph = out.size();
-        slots.push_back({ (int)glyph, (int)glyph + 1, it.charging ? (int)glyph + 2 : -1 });
+        slots.push_back({ (int)glyph, (int)glyph + 1 });
         bool branded = it.accent != Accent::None;
         BrandColor bc = AccentColor(it.accent, g_light);
         Rgb accent{ bc.r, bc.g, bc.b };
@@ -408,15 +407,15 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
             icon.halo = Halo(icon.m, icon.haloR);
             icon.haloAlpha = g_light ? 60 : 140;
         }
+        icon.charging = it.charging;
         out.push_back(std::move(icon));
         std::wstring t = !it.text.empty() ? it.text : it.percent >= 0 ? std::to_wstring(it.percent) + L"%" : L"?";
-        Piece label{ RenderMask(t, text, g_light), tc, a, it.charging ? Px(2) : 0 };
+        Piece label{ RenderMask(t, text, g_light), tc, a, 0 };
         if (branded && it.percent >= 0) {
             label.barPct = it.percent;
             label.barColor = it.low ? red : accent;
         }
         out.push_back(std::move(label));
-        if (it.charging) out.push_back({ RenderMask(std::wstring(1, kBolt), bolt, g_light), charge, a, 0 });
         out.back().gapAfter = i + 1 < g_items.size() ? Px(14) : 0;
         if (!it.label.empty()) {  // tiny caption in the bottom-right corner of the icon
             Piece c{ RenderMask(it.label, caption, g_light), fg, a, 0 };
@@ -427,7 +426,6 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
         }
     }
     DeleteObject(icons);
-    DeleteObject(bolt);
     DeleteObject(text);
     DeleteObject(caption);
 
@@ -440,42 +438,32 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
     }
     bool stacked = !g_vertical && g_stacked && !slots.empty() && barH >= iconH + rowGap + textH + barRoom + Px(6);
     if (g_vertical && !slots.empty()) {
-        // One block per device, centred in the bar's width: icon, then the percentage (and bolt) under it.
+        // One block per device, centred in the bar's width: icon, then the percentage under it.
         width = barW;
         int y = Px(6);
         for (const Slot& s : slots) {
             Piece& ic = out[s.icon];
             Piece& lb = out[s.label];
-            int boltW = s.bolt >= 0 ? Px(2) + out[s.bolt].m.w : 0;
             ic.px = (barW - ic.m.w) / 2;
             ic.py = y;
             y += ic.m.h + rowGap;
-            lb.px = (barW - lb.m.w - boltW) / 2;
+            lb.px = (barW - lb.m.w) / 2;
             lb.py = y;
-            if (s.bolt >= 0) {
-                out[s.bolt].px = lb.px + lb.m.w + Px(2);
-                out[s.bolt].py = y + (lb.m.h - out[s.bolt].m.h) / 2;
-            }
             y += lb.m.h + (lb.barPct >= 0 ? barRoom : 0) + Px(8);
         }
         height = y;
         return out;
     }
     if (stacked) {
-        // Icon on top (bolt to its right), percentage centred under it; the pair centred in the bar's height.
+        // Icon on top, percentage centred under it; the pair centred in the bar's height.
         int top = (barH - (iconH + rowGap + textH + barRoom)) / 2;
         int x = Px(8);
         for (const Slot& s : slots) {
             Piece& ic = out[s.icon];
             Piece& lb = out[s.label];
-            int boltW = s.bolt >= 0 ? Px(2) + out[s.bolt].m.w : 0;
-            int slotW = std::max(ic.m.w + boltW, lb.m.w);
-            ic.px = x + (slotW - ic.m.w - boltW) / 2;
+            int slotW = std::max(ic.m.w, lb.m.w);
+            ic.px = x + (slotW - ic.m.w) / 2;
             ic.py = top + (iconH - ic.m.h) / 2;
-            if (s.bolt >= 0) {
-                out[s.bolt].px = ic.px + ic.m.w + Px(2);
-                out[s.bolt].py = top + (iconH - out[s.bolt].m.h) / 2;
-            }
             lb.px = x + (slotW - lb.m.w) / 2;
             lb.py = top + iconH + rowGap;
             x += slotW + Px(10);
@@ -517,6 +505,7 @@ void PaintStrip(HWND wnd, HWND taskbar, bool hover, SIZE& size) {
 
     int x = Px(8);
     Rgb track = g_light ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 };
+    Rgb charge = g_light ? Rgb{ 0, 160, 40 } : Rgb{ 30, 230, 80 };
     std::vector<int> xs(pieces.size()), ys(pieces.size());
     for (size_t i = 0; i < pieces.size(); i++) {
         const Piece& p = pieces[i];
@@ -544,7 +533,16 @@ void PaintStrip(HWND wnd, HWND taskbar, bool hover, SIZE& size) {
                 for (int ox = -1; ox <= 1; ox++)
                     if (ox || oy) cv.Draw(p.m, xs[i] + ox, ys[i] + oy, barColor, 255);
         }
-        cv.Draw(p.m, xs[i], ys[i], p.color, p.alpha);
+        if (p.charging) {  // empty part ghosted in the normal colour, filled part green
+            // green fills the icon bottom to top, then drains from the bottom (2.4 s loop, ignores the battery level)
+            double t = (GetTickCount64() % 2400) / 2400.0;
+            int head = t < 0.5 ? (int)(p.m.h * t * 2) : p.m.h;          // filled height
+            int tail = t < 0.5 ? 0 : (int)(p.m.h * (t - 0.5) * 2);       // drained height
+            cv.Draw(p.m, xs[i], ys[i], p.color, p.alpha * 80 / 100);
+            cv.Draw(p.m, xs[i], ys[i], charge, p.alpha, p.m.h - tail, p.m.h - head);
+        } else {
+            cv.Draw(p.m, xs[i], ys[i], p.color, p.alpha);
+        }
     }
 
     HDC screen = GetDC(nullptr);
@@ -778,6 +776,10 @@ LRESULT CALLBACK WidgetProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             SetHover(h, true);
             return 0;
         }
+        case WM_TIMER:  // charging sweep animation
+            PaintAll();
+            widget::Reposition();
+            return 0;
         case WM_MOUSELEAVE:
             SetHover(h, false);
             return 0;
@@ -885,6 +887,9 @@ void SetItems(const std::vector<WidgetItem>& items, const std::wstring& tooltip)
     }
     PaintAll();
     Reposition();
+    bool anyCharging = false;
+    for (auto& it : g_items) anyCharging |= it.charging;
+    if (g_wnd) { if (anyCharging) SetTimer(g_wnd, 1, 100, nullptr); else KillTimer(g_wnd, 1); }  // charge sweep animation
 }
 
 void SetLightTheme(bool light) {

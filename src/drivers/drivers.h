@@ -121,6 +121,8 @@ void PollMoondrop(PollContext& ctx);   // MOONDROP GM01 Pro headset (WalkPlay 2.
 void PollAlienware(PollContext& ctx);  // Alienware AW920H headset on its 2.4 GHz dongle (413C:A515)
 // Fallbacks.
 void PollHeadsetControl(PollContext &ctx); // only if headsetcontrol.exe is installed
+std::wstring HidContainer(const std::wstring& path);  // container id of the physical device behind a HID path
+void PollUnsupported(PollContext& ctx);  // last: mice/keyboards no driver could read, flagged `unsupported`
 void PollGenericHid(PollContext &ctx);
 void PollBluetooth(PollContext &ctx);
 void PollXInput(PollContext &ctx);
