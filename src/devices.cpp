@@ -112,6 +112,7 @@ std::vector<DeviceStatus> PollAllDevices() {
     PollAirPods(ctx);  // before the Bluetooth fallback, which has no level for AirPods
     PollPhoneLink(ctx);
     PollGalaxyBuds(ctx);  // before the Bluetooth fallback, which skips devices already listed by name
+    PollNothing(ctx);     // same, for Nothing / CMF earbuds
     PollMoondrop(ctx);
     PollAlienware(ctx);
     PollMaono(ctx);  // MAONO PD200W receiver (352F:040E), experimental battery query
