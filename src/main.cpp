@@ -17,6 +17,7 @@
 #include "i18n.h"
 #include "labels.h"
 #include "report.h"
+#include "status_json.h"
 #include "widget.h"
 
 namespace {
@@ -434,6 +435,11 @@ int KindOrder(DeviceKind k) {  // default order: headset first, then mouse, ...
 
 bool IsShown(const TrayEntry& e) { return e.st.connected && !IsEntryHidden(e); }
 
+int KeyRank(const std::wstring& key) {
+    auto it = std::find(g_order.begin(), g_order.end(), key);
+    return it == g_order.end() ? INT_MAX : (int)(it - g_order.begin());
+}
+
 // Entries in left-to-right order: the user's order first, then the rest by type and name. Works the
 // same for every kind of device (receivers, Bluetooth, controllers, HeadsetControl) as it only uses
 // the device key.
@@ -441,12 +447,8 @@ std::vector<TrayEntry*> OrderedEntries(bool shownOnly) {
     std::vector<TrayEntry*> list;
     for (auto& [k, e] : g_entries)
         if (!shownOnly || IsShown(e)) list.push_back(&e);
-    auto rank = [](const TrayEntry* e) {
-        auto it = std::find(g_order.begin(), g_order.end(), e->st.key);
-        return it == g_order.end() ? INT_MAX : (int)(it - g_order.begin());
-    };
     std::stable_sort(list.begin(), list.end(), [&](const TrayEntry* a, const TrayEntry* b) {
-        int ra = rank(a), rb = rank(b);
+        int ra = KeyRank(a->st.key), rb = KeyRank(b->st.key);
         if (ra != rb) return ra < rb;
         int ka = KindOrder(a->st.kind), kb = KindOrder(b->st.kind);
         if (ka != kb) return ka < kb;
@@ -483,6 +485,51 @@ void UpdateWidget() {
     widget::SetItems(items, tip);
 }
 
+StatusDevice ToStatus(const DeviceStatus& s, int lastPct) {
+    StatusDevice d;
+    d.key = s.key;
+    d.name = s.name;
+    d.via = s.via;
+    d.detail = s.detail;
+    d.levelText = s.levelText;
+    d.kind = s.kind;
+    d.percent = s.percent;
+    d.lastPct = lastPct;
+    d.millivolts = s.millivolts;
+    d.charging = s.charging;
+    d.asleep = s.asleep;
+    d.connected = s.connected;
+    return d;
+}
+
+// Devices as external tools (YASB, scripts) should see them: the same list, order and hiding rules
+// as the taskbar widget, so the snapshot does not depend on which display mode is active.
+std::vector<StatusDevice> VisibleDevices() {
+    std::vector<StatusDevice> out;
+    for (auto* e : OrderedEntries(true)) out.push_back(ToStatus(e->st, e->lastPct));
+    return out;
+}
+
+void UpdateStatusSnapshot() { WriteStatusSnapshot(VisibleDevices(), "snapshot", LOW_BATTERY); }
+
+// The same view for `--json`, which runs without the app's poll history: no last known values, and
+// only the settings that can be read without the tray running.
+std::vector<StatusDevice> CliDevices(std::vector<DeviceStatus> list) {
+    std::vector<StatusDevice> out;
+    for (auto& s : list) {
+        if (!s.connected || IsHidden(s.key)) continue;
+        if (g_hideLastKnown && s.asleep) continue;
+        out.push_back(ToStatus(s, -1));
+    }
+    std::stable_sort(out.begin(), out.end(), [](const StatusDevice& a, const StatusDevice& b) {
+        int ra = KeyRank(a.key), rb = KeyRank(b.key);
+        if (ra != rb) return ra < rb;
+        int ka = KindOrder(a.kind), kb = KindOrder(b.kind);
+        return ka != kb ? ka < kb : a.name < b.name;
+    });
+    return out;
+}
+
 void OnResults(std::vector<DeviceStatus>& results) {
     std::map<std::wstring, bool> seen;
     for (auto& s : results) {
@@ -514,6 +561,7 @@ void OnResults(std::vector<DeviceStatus>& results) {
     }
     UpdatePlaceholder();
     UpdateWidget();
+    UpdateStatusSnapshot();
 }
 
 // Makes the actual display match the chosen mode; falls back to tray icons if the taskbar
@@ -551,6 +599,7 @@ void SetHideLastKnown(bool on) {
     for (auto& [k, e] : g_entries) ApplyEntry(e);
     UpdatePlaceholder();
     UpdateWidget();
+    UpdateStatusSnapshot();
 }
 
 void ReAddAll() {
@@ -598,6 +647,7 @@ void ToggleHidden(const std::wstring& key) {
     if (it != g_entries.end()) ApplyEntry(it->second);
     UpdatePlaceholder();
     UpdateWidget();
+    UpdateStatusSnapshot();
 }
 
 // Swaps a shown device with its neighbour (dir -1 = left, +1 = right) and remembers the new order.
@@ -615,6 +665,7 @@ void MoveEntry(const std::wstring& key, int dir) {
     g_order = order;
     SaveOrder();
     UpdateWidget();
+    UpdateStatusSnapshot();
 }
 
 void ShowMenu() {
@@ -843,18 +894,43 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 if (e.icon) DestroyIcon(e.icon);
             }
             if (g_placeholder) TrayDelete(PLACEHOLDER_ID);
+            DeleteFileW(StatusSnapshotPath().c_str());  // so consumers fall back to --json right away
             PostQuitMessage(0);
             return 0;
     }
     return DefWindowProcW(h, msg, wp, lp);
 }
 
-// `WirelessBattery.exe --list` prints what it finds, `--dump` every HID collection.
-int ListToConsole(bool dump) {
+// Windowed exe: write to the inherited stdout (pipes from scripts / YASB), or attach to the
+// parent console when there is one.
+HANDLE ConsoleOut() {
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
     if (!out || out == INVALID_HANDLE_VALUE) {
-        if (AttachConsole(ATTACH_PARENT_PROCESS)) out = CreateFileW(L"CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (AttachConsole(ATTACH_PARENT_PROCESS))
+            out = CreateFileW(L"CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
     }
+    return out;
+}
+
+// `WirelessBattery.exe --json` prints the document the app also keeps in status.json. Meant for
+// integrations that poll while the app is not running: it reads the devices itself, applying the
+// same hiding and order settings.
+int PrintJson() {
+    LoadHidden();
+    LoadOrder();
+    g_hideLastKnown = LoadHideLastKnown();
+    std::string json = BuildStatusJson(CliDevices(PollAllDevices()), "cli", LOW_BATTERY, IsoTimestampNow());
+    HANDLE out = ConsoleOut();
+    if (out && out != INVALID_HANDLE_VALUE) {
+        DWORD w = 0;
+        WriteFile(out, json.data(), (DWORD)json.size(), &w, nullptr);
+    }
+    return 0;
+}
+
+// `WirelessBattery.exe --list` prints what it finds, `--dump` every HID collection.
+int ListToConsole(bool dump) {
+    HANDLE out = ConsoleOut();
     auto write = [&](const std::wstring& s) {
         int n = WideCharToMultiByte(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0, nullptr, nullptr);
         std::string u(n, 0);
@@ -910,6 +986,7 @@ int ListToConsole(bool dump) {
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
+    if (cmdLine && wcsstr(cmdLine, L"--json")) return PrintJson();
     if (cmdLine && wcsstr(cmdLine, L"--list")) return ListToConsole(false);
     if (cmdLine && wcsstr(cmdLine, L"--dump")) return ListToConsole(true);
     if (cmdLine && wcsstr(cmdLine, L"--report")) {  // the "Request support for a device" window on its own

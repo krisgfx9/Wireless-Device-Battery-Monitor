@@ -70,5 +70,7 @@ test:
 	./build/labels_test.exe
 	$(CXX) $(CXXFLAGS) tests/brands_test.cpp src/brands.cpp -o build/brands_test.exe
 	./build/brands_test.exe
+	$(CXX) $(CXXFLAGS) tests/status_json_test.cpp src/status_json.cpp -o build/status_json_test.exe
+	./build/status_json_test.exe
 
 .PHONY: clean test

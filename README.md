@@ -184,12 +184,17 @@ anywhere and run `WirelessBattery.exe`.
 
 ```
 WirelessBattery.exe --list     # print every device and its battery level, then exit
+WirelessBattery.exe --json     # the same devices as JSON, for scripts and widgets (see docs/yasb.md)
 WirelessBattery.exe --dump     # every HID collection, HID devices that could not be opened, all USB devices (also ones
                                # without a HID interface) and Bluetooth devices; also saved to %TEMP%\WirelessBattery-dump.txt
 WirelessBattery.exe --report   # open the "Request support for a device" window
 WirelessBattery.exe --demo     # sample devices of every brand instead of real ones (screenshots, checking colors)
 WirelessBattery.exe --quit     # close the running instance
 ```
+
+While it runs, the app also keeps `%LOCALAPPDATA%\WirelessBattery\status.json` up to date after every poll (same document
+as `--json`, with hidden devices, order and *Hide last known* already applied) and deletes it when it quits. Integrations
+such as [YASB](docs/yasb.md) read the snapshot instead of polling the devices a second time.
 
 **Device not shown?** Right-click the widget or tray icon and choose **Request support for a device...**. Pick the device, check
 what will be sent (it is shown word for word: the device name, its type, its USB/HID ids and interface layout, and your optional
