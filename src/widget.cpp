@@ -6,6 +6,7 @@
 #include <uiautomation.h>
 #include <algorithm>
 #include <climits>
+#include <cmath>
 
 namespace {
 
@@ -14,6 +15,7 @@ UINT g_clickMsg;
 bool g_light, g_hover;
 bool g_background;  // opaque rounded plate behind the text, for transparent / restyled taskbars
 bool g_stacked;     // icon above the percentage (menu option, PR #525)
+bool g_showPercentSign = true;
 bool g_vertical;    // the primary taskbar is docked left or right: one block per device, stacked (PR #321)
 std::vector<WidgetItem> g_items;
 std::wstring g_tipText;
@@ -265,7 +267,7 @@ struct Mask {
     std::vector<BYTE> a;
 };
 
-Mask RenderMask(const std::wstring& s, HFONT font, bool darkOnLight) {
+Mask RenderMask(const std::wstring& s, HFONT font, bool darkOnLight, const Mask* cell = nullptr) {
     Mask m;
     HDC dc = CreateCompatibleDC(nullptr);
     HGDIOBJ of = SelectObject(dc, font);
@@ -292,17 +294,32 @@ Mask RenderMask(const std::wstring& s, HFONT font, bool darkOnLight) {
         for (int x = 0; x < W; x++)
             if (cover(p[y * W + x])) { x0 = std::min(x0, x); x1 = std::max(x1, x); y0 = std::min(y0, y); y1 = std::max(y1, y); }
     if (x1 >= 0) {
-        m.w = x1 - x0 + 1;
-        m.h = y1 - y0 + 1;
+        const int inkW = x1 - x0 + 1, inkH = y1 - y0 + 1;
+        m.w = std::max(inkW, cell ? cell->w : 0);
+        m.h = std::max(inkH, cell ? cell->h : 0);
+        const int ox = (m.w - inkW) / 2, oy = (m.h - inkH) / 2;
         m.a.resize((size_t)m.w * m.h);
-        for (int y = 0; y < m.h; y++)
-            for (int x = 0; x < m.w; x++) m.a[y * m.w + x] = cover(p[(y0 + y) * W + x0 + x]);
+        for (int y = 0; y < inkH; y++)
+            for (int x = 0; x < inkW; x++) m.a[(oy + y) * m.w + ox + x] = cover(p[(y0 + y) * W + x0 + x]);
     }
     SelectObject(dc, ob);
     SelectObject(dc, of);
     DeleteObject(bmp);
     DeleteDC(dc);
     return m;
+}
+
+// Balance the visible strokes, rather than just the cropped bounding box: the headphone
+// glyph has more ink at the bottom, whereas the mouse's strokes are heavier near the top.
+int OpticalRowY(const Mask& mask, int height) {
+    double mass = 0, moment = 0;
+    for (int y = 0; y < mask.h; y++)
+        for (int x = 0; x < mask.w; x++) {
+            int a = mask.a[y * mask.w + x];
+            mass += a;
+            moment += y * a;
+        }
+    return mass > 0 ? (int)std::lround((height - 1) / 2.0 - moment / mass) : (height - mask.h) / 2;
 }
 
 struct Rgb { int r, g, b; };
@@ -371,7 +388,7 @@ struct Piece {
     Rgb barColor{};
     Mask halo;        // glow drawn behind the glyph (branded devices)
     int haloR = 0, haloAlpha = 0;
-    int px = INT_MIN, py = 0;  // fixed top-left position (stacked and vertical layouts); INT_MIN = flow left to right
+    int px = INT_MIN, py = 0;  // fixed top-left position; INT_MIN = flow left to right (empty-state icon)
 };
 
 // Three arrangements of the same pieces:
@@ -384,13 +401,14 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
     Rgb fg = g_light ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 };
     Rgb red = g_light ? Rgb{ 196, 30, 40 } : Rgb{ 255, 90, 90 };
     Rgb charge = g_light ? Rgb{ 0, 120, 212 } : Rgb{ 96, 205, 255 };
-    HFONT icons = MakeFont(Px(16), FW_NORMAL, L"Segoe Fluent Icons", L"Segoe MDL2 Assets");
-    HFONT bolt = MakeFont(Px(11), FW_NORMAL, L"Segoe Fluent Icons", L"Segoe MDL2 Assets");
-    HFONT text = MakeFont(Px(13), FW_NORMAL, L"Segoe UI Variable Text", L"Segoe UI", Px(12));
+    HFONT icons = MakeFont(Px(14), FW_NORMAL, L"Segoe Fluent Icons", L"Segoe MDL2 Assets");
+    HFONT bolt = MakeFont(Px(10), FW_NORMAL, L"Segoe Fluent Icons", L"Segoe MDL2 Assets");
+    HFONT text = MakeFont(Px(10), FW_NORMAL, L"Segoe UI Variable Text", L"Segoe UI", Px(9));
     HFONT caption = MakeFont(std::max(8, Px(7)), FW_SEMIBOLD, L"Segoe UI Variable Text", L"Segoe UI");  // never under 8 px
+    const Mask percentCell = RenderMask(g_showPercentSign ? L"100%" : L"100", text, g_light);
 
     std::vector<Piece> out;
-    struct Slot { int icon, label, bolt; };  // indices of one device's pieces
+    struct Slot { int icon, label, bolt; bool numeric; };  // indices of one device's pieces
     std::vector<Slot> slots;
     if (g_items.empty()) out.push_back({ RenderMask(std::wstring(1, kBatteryUnknown), icons, g_light), fg, 110, 0 });
     for (size_t i = 0; i < g_items.size(); i++) {
@@ -398,7 +416,7 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
         int a = it.dim ? 120 : 255;
         Rgb tc = it.low ? red : fg;
         size_t glyph = out.size();
-        slots.push_back({ (int)glyph, (int)glyph + 1, it.charging ? (int)glyph + 2 : -1 });
+        slots.push_back({ (int)glyph, (int)glyph + 1, it.charging ? (int)glyph + 2 : -1, it.text.empty() });
         bool branded = it.accent != Accent::None;
         BrandColor bc = AccentColor(it.accent, g_light);
         Rgb accent{ bc.r, bc.g, bc.b };
@@ -409,8 +427,11 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
             icon.haloAlpha = g_light ? 60 : 140;
         }
         out.push_back(std::move(icon));
-        std::wstring t = !it.text.empty() ? it.text : it.percent >= 0 ? std::to_wstring(it.percent) + L"%" : L"?";
-        Piece label{ RenderMask(t, text, g_light), tc, a, it.charging ? Px(2) : 0 };
+        std::wstring t = !it.text.empty() ? it.text : it.percent >= 0 ?
+                         std::to_wstring(it.percent) + (g_showPercentSign ? L"%" : L"") : L"?";
+        // A fixed numeric cell keeps each device in place as its level changes between 7%, 70% and 100%.
+        const Mask* cell = it.text.empty() ? &percentCell : nullptr;
+        Piece label{ RenderMask(t, text, g_light, cell), tc, a, it.charging ? Px(2) : 0 };
         if (branded && it.percent >= 0) {
             label.barPct = it.percent;
             label.barColor = it.low ? red : accent;
@@ -483,9 +504,39 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
         width = x - Px(10) + Px(8);
         return out;
     }
-    width = Px(8) * 2;
-    for (auto& p : out)
-        if (p.anchor < 0) width += p.m.w + p.gapAfter;
+    if (!slots.empty()) {
+        // Equal columns keep the icon/text gap and the device spacing consistent for every kind.
+        int iconW = Px(16), labelW = percentCell.w, boltW = 0;
+        for (const Slot& s : slots) {
+            iconW = std::max(iconW, out[s.icon].m.w);
+            labelW = std::max(labelW, out[s.label].m.w);
+            if (s.bolt >= 0) boltW = std::max(boltW, out[s.bolt].m.w);
+        }
+        const int iconGap = Px(5), deviceGap = Px(14);
+        const int slotW = iconW + iconGap + labelW + (boltW ? Px(2) + boltW : 0);
+        const int numericY = OpticalRowY(percentCell, barH);
+        int x = Px(8);
+        for (const Slot& s : slots) {
+            Piece& ic = out[s.icon];
+            Piece& lb = out[s.label];
+            // Align the visible right edges so narrow mouse icons have the same text gap as headsets.
+            ic.px = x + iconW - ic.m.w;
+            ic.py = OpticalRowY(ic.m, barH);
+            lb.px = x + iconW + iconGap + (labelW - lb.m.w) / 2;
+            // A shared numeric baseline avoids jitter as the percentage changes.
+            lb.py = s.numeric ? numericY - (lb.m.h - percentCell.h) / 2 : OpticalRowY(lb.m, barH);
+            if (s.bolt >= 0) {
+                Piece& b = out[s.bolt];
+                b.px = x + iconW + iconGap + labelW + Px(2) + (boltW - b.m.w) / 2;
+                b.py = OpticalRowY(b.m, barH);
+            }
+            x += slotW + deviceGap;
+        }
+        width = x - deviceGap + Px(8);
+    } else {
+        width = Px(8) * 2;
+        for (const auto& p : out) width += p.m.w + p.gapAfter;
+    }
     return out;
 }
 
@@ -521,7 +572,7 @@ void PaintStrip(HWND wnd, HWND taskbar, bool hover, SIZE& size) {
     for (size_t i = 0; i < pieces.size(); i++) {
         const Piece& p = pieces[i];
         if (p.anchor < 0) {
-            bool fixed = p.px != INT_MIN;  // stacked / vertical layout: Layout() placed it
+            bool fixed = p.px != INT_MIN;  // Layout() placed the device pieces
             xs[i] = fixed ? p.px : x;
             ys[i] = fixed ? p.py : (H - p.m.h) / 2;
             if (p.haloR) cv.Draw(p.halo, xs[i] - p.haloR, ys[i] - p.haloR, p.color, p.haloAlpha * p.alpha / 255);
@@ -900,6 +951,12 @@ void SetBackground(bool on) {
 
 void SetStacked(bool on) {
     g_stacked = on;
+    PaintAll();
+    if (g_wnd) Reposition();
+}
+
+void SetShowPercentSign(bool on) {
+    g_showPercentSign = on;
     PaintAll();
     if (g_wnd) Reposition();
 }

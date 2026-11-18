@@ -26,15 +26,18 @@ Battery levels of your wireless mouse, headset, keyboard and controller, right o
 ## Display
 
 **On the taskbar (default):** `🎧 30%  🖱 93%` next to the notification area, drawn with the Windows icon font.
+- **Compact display:** smaller device icons and text, with a fixed numeric space so `7%`, `70%` and `100%` keep the same font size and do not move neighbouring devices.
+- **Aligned device groups:** the horizontal layout uses equal columns and a shared numeric baseline, with the visible icon strokes balanced vertically and consistent spacing between icons, numbers and devices.
 - **Low battery:** a red number means 15% or less.
 - **Charging:** a blue ⚡ appears next to the number.
+- **Percent sign:** toggle *Show percent sign (%)* to show `77%` or just `77` on the taskbar. It is on by default, applies immediately, and is remembered after restarting. This option is available in taskbar mode; tray icons already show numbers without `%`.
 - **Asleep:** dimmed text means the device is asleep and the last known value is shown.
 - **Two devices of one kind:** with two mice (or two controllers...) both would get the same icon, so each one gets a tiny caption of up to 3 letters in the corner of its icon, taken from its name (`MX`, `PRO`), or a number when the names do not tell them apart. A device that is alone in its kind shows no caption.
 - **Theme:** it follows light/dark mode and DPI scaling.
 - **Transparent taskbar themes** (e.g. Windhawk's Taskbar Styler): turn on *Background behind taskbar text* in the menu to keep the text readable over the wallpaper.
 - **Several monitors:** the widget shows on every monitor's taskbar, next to its clock, so it stays visible while a game runs fullscreen. *Show the widget on* in the menu picks *All monitors*, *Main monitor only*, or one display (e.g. only *Display 3*).
 - **More display options:** *Icons above percentages* stacks each icon over its level to save width; *Brand colors* shows known brands in their color (Razer green, HyperX red, ...) with a small level bar; two devices of the same kind get a tiny caption so they can be told apart; left and right taskbars get a column of devices.
-- **Languages:** English, العربية, Deutsch, Español, Français, עברית, 日本語, Polski, Português (Brasil), Русский, Türkçe, 简体中文 and 繁體中文. The app follows the Windows display language; *Language* in the menu picks another one. See [Translations](#translations) to add or improve a language.
+- **Languages:** English, العربية, Deutsch, Español, Français, עברית, 日本語, Polski, Português (Brasil), Русский, Tiếng Việt, Türkçe, 简体中文 and 繁體中文. The app follows the Windows display language; *Language* in the menu picks another one. See [Translations](#translations) to add or improve a language.
 - **Brand colors:** devices of 15 known brands get their maker's color, with a soft glow and a thin level bar under the
   percentage: Razer green, Logitech blue, SteelSeries orange, Corsair yellow, HyperX / ROG / ZOWIE red, PlayStation,
   Xbox, Samsung, Apple, Jabra, JBL, Cooler Master and Steam. Each color has a dark- and a light-taskbar shade. The brand
@@ -42,6 +45,7 @@ Battery levels of your wireless mouse, headset, keyboard and controller, right o
   `src/brands.cpp`. Turn it off with *Brand colors* in the menu.
 
 **Tray icons:** one icon per device with the number drawn in it, plus a "Low battery" notification at 15%. The app switches to this automatically when the taskbar is vertical or can't be found.
+The font is fitted to `100` at the taskbar's DPI and reused for every value, so `7`, `70` and `100` stay the same size and share a baseline.
 
 Hover for details. Click for the menu: every device (click one to hide or show it), display mode, *Refresh now*, *Start with Windows*, and *Exit*. Levels refresh every 60 seconds, and right away when a device is plugged in or the PC wakes up.
 
@@ -276,6 +280,7 @@ The taskbar widget is a layered child window of `Shell_TrayWnd`, placed left of 
 ## Translations
 
 Every language is a plain UTF-8 text file in [`lang/`](lang): English on the left, the translation on the right.
+Vietnamese is built in through [`lang/vi.txt`](lang/vi.txt). Choose *Language → Tiếng Việt*, or use *Automatic (Windows language)* when the Windows display language is Vietnamese.
 
 ```
 @code = it

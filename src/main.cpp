@@ -32,7 +32,7 @@ constexpr UINT PLACEHOLDER_ID = 1;
 
 enum MenuId : UINT {
     ID_REFRESH = 100, ID_AUTOSTART, ID_HIDE_LAST_KNOWN, ID_WIDGET_BACKGROUND, ID_EXIT, ID_MODE_WIDGET, ID_MODE_TRAY, ID_SUPPORT, ID_REPORT,
-    ID_BRAND_COLORS, ID_STACKED,
+    ID_BRAND_COLORS, ID_STACKED, ID_PERCENT_SIGN,
     ID_LANG_AUTO = 400, ID_LANG_ADD, ID_LANG_FIRST,  // "Language": ID_LANG_FIRST + 0..63
     ID_MONITOR_ALL = 300, ID_MONITOR_MAIN, ID_MONITOR_FIRST,  // "Show the widget on": ID_MONITOR_FIRST + 0..31
     ID_DEVICE_FIRST = 1000
@@ -56,6 +56,7 @@ bool g_hideLastKnown = false;  // hide (last known) / asleep devices from taskba
 std::wstring g_widgetMonitor = L"all";  // which taskbars show the widget: "all", "main" or one monitor id
 bool g_widgetBackground = false;  // draw a plate behind the taskbar text (transparent taskbar themes)
 bool g_stacked = false;      // icon above the percentage (menu option)
+bool g_showPercentSign = true;  // include '%' in taskbar battery labels
 bool g_brandColors = false;  // off by default; known brands get their color (Razer green, Logitech blue, ...)
 
 struct TrayEntry {
@@ -186,6 +187,8 @@ void SetWidgetMonitor(const std::wstring& v) {
 }
 bool LoadStacked() { return LoadBoolSetting(L"StackedLayout", false); }
 void SaveStacked(bool on) { SaveBoolSetting(L"StackedLayout", on); }
+bool LoadShowPercentSign() { return LoadBoolSetting(L"ShowPercentSign", true); }
+void SaveShowPercentSign(bool on) { SaveBoolSetting(L"ShowPercentSign", on); }
 bool LoadBrandColors() { return LoadBoolSetting(L"BrandColors", false); }
 void SaveBrandColors(bool on) { SaveBoolSetting(L"BrandColors", on); }
 
@@ -209,7 +212,7 @@ void SetAutostart(bool on) {
 }
 
 // ---- icon rendering ---------------------------------------------------------------------------
-// Draws the percentage as large digits with a small level bar underneath. GDI text is rendered
+// Draws the percentage with a small level bar underneath. GDI text is rendered
 // white-on-black into a scratch bitmap and its brightness is used as the alpha channel, which
 // gives smooth edges on the transparent icon.
 
@@ -221,6 +224,9 @@ HICON RenderIcon(const std::wstring& text, int barPct, Rgb textColor, Rgb barCol
     const int S = GetSystemMetricsForDpi(SM_CXSMICON, dpi ? dpi : GetDpiForSystem());
     const int barH = std::max(2, S / 8);
     const int textH = S - barH - 1;
+    // Use the full icon width so three digits stay readable at the same size as one or two.
+    const int maxTextW = S;
+    const int maxTextH = std::max(1, textH * 10 / 13);
 
     HDC dc = CreateCompatibleDC(nullptr);
     BITMAPINFO bi{};
@@ -241,23 +247,33 @@ HICON RenderIcon(const std::wstring& text, int barPct, Rgb textColor, Rgb barCol
     auto* sp = static_cast<DWORD*>(sbits);
 
     int bx0 = 0, by0 = 0, bx1 = -1, by1 = -1;
-    for (int fh = textH * 2; fh >= 6; fh--) {
-        HFONT f = CreateFontW(-fh, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                              ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-        HGDIOBJ oldF = SelectObject(dc, f);
-        SetTextCharacterExtra(dc, text.size() >= 3 ? -1 : 0);
+    auto renderText = [&](const std::wstring& value) {
         memset(sbits, 0, (size_t)W * H * 4);
-        TextOutW(dc, 2, 0, text.c_str(), (int)text.size());
+        TextOutW(dc, 2, 0, value.c_str(), (int)value.size());
         GdiFlush();
-        SelectObject(dc, oldF);
-        DeleteObject(f);
         bx0 = W; by0 = H; bx1 = -1; by1 = -1;
         for (int y = 0; y < H; y++)
             for (int x = 0; x < W; x++)
                 if (sp[y * W + x] & 0xFF) { bx0 = std::min(bx0, x); bx1 = std::max(bx1, x); by0 = std::min(by0, y); by1 = std::max(by1, y); }
-        if (bx1 < 0) break;
-        if (bx1 - bx0 + 1 <= S && by1 - by0 + 1 <= textH) break;
+    };
+    // Fit the widest battery value once, independent of the current percentage.
+    // Keep identical character spacing for all values, including the unknown marker.
+    SetTextCharacterExtra(dc, -1);
+    HFONT font = nullptr;
+    HGDIOBJ oldFont = nullptr;
+    for (int fh = maxTextH * 2; fh >= 6; fh--) {
+        font = CreateFontW(-fh, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                           ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        oldFont = SelectObject(dc, font);
+        renderText(L"100");
+        if (bx1 < 0 || (bx1 - bx0 + 1 <= maxTextW && by1 - by0 + 1 <= maxTextH) || fh == 6) break;
+        SelectObject(dc, oldFont);
+        DeleteObject(font);
     }
+    const int referenceTop = by0, referenceHeight = by1 >= by0 ? by1 - by0 + 1 : 0;
+    renderText(text);
+    SelectObject(dc, oldFont);
+    DeleteObject(font);
 
     // final icon bitmap
     bi.bmiHeader.biWidth = S;
@@ -274,7 +290,7 @@ HICON RenderIcon(const std::wstring& text, int barPct, Rgb textColor, Rgb barCol
     };
     if (bx1 >= 0) {
         int gw = bx1 - bx0 + 1, gh = by1 - by0 + 1;
-        int ox = (S - gw) / 2, oy = (textH - gh) / 2;
+        int ox = (S - gw) / 2, oy = (textH - referenceHeight) / 2 + by0 - referenceTop;
         for (int y = 0; y < gh; y++)
             for (int x = 0; x < gw; x++)
                 put(ox + x, oy + y, textColor, sp[(by0 + y) * W + (bx0 + x)] & 0xFF);
@@ -584,6 +600,12 @@ void SetStacked(bool on) {
     widget::SetStacked(on);
 }
 
+void SetShowPercentSign(bool on) {
+    g_showPercentSign = on;
+    SaveShowPercentSign(on);
+    widget::SetShowPercentSign(on);
+}
+
 void SetBrandColors(bool on) {
     g_brandColors = on;
     SaveBrandColors(on);
@@ -648,6 +670,8 @@ void ShowMenu() {
     UINT bgFlags = MF_STRING | (g_widgetBackground ? MF_CHECKED : 0) | (g_wantWidget ? 0 : MF_GRAYED);
     AppendMenuW(m, bgFlags, ID_WIDGET_BACKGROUND, T(L"Background behind taskbar text (for transparent taskbars)"));
     AppendMenuW(m, MF_STRING | (g_stacked ? MF_CHECKED : 0) | (g_wantWidget ? 0 : MF_GRAYED), ID_STACKED, T(L"Icons above percentages (narrower)"));
+    AppendMenuW(m, MF_STRING | (g_showPercentSign ? MF_CHECKED : 0) | (g_wantWidget ? 0 : MF_GRAYED),
+                ID_PERCENT_SIGN, T(L"Show percent sign (%)"));
     // With more than one monitor: choose which taskbars show the widget (all, main only, or one monitor).
     auto monitors = widget::OtherMonitors();
     if (monitors.size() > 31) monitors.resize(31);
@@ -713,6 +737,7 @@ void ShowMenu() {
         case ID_MONITOR_MAIN: SetWidgetMonitor(L"main"); break;
         case ID_BRAND_COLORS: SetBrandColors(!g_brandColors); break;
         case ID_STACKED: SetStacked(!g_stacked); break;
+        case ID_PERCENT_SIGN: SetShowPercentSign(!g_showPercentSign); break;
         case ID_MODE_WIDGET: SetMode(true); break;
         case ID_MODE_TRAY: SetMode(false); break;
         case ID_SUPPORT: ShellExecuteW(nullptr, L"open", L"https://github.com/sponsors/krisgfx9", nullptr, nullptr, SW_SHOWNORMAL); break;
@@ -961,7 +986,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     g_widgetBackground = LoadWidgetBackground();
     g_brandColors = LoadBrandColors();
     g_stacked = LoadStacked();
+    g_showPercentSign = LoadShowPercentSign();
     widget::SetStacked(g_stacked);
+    widget::SetShowPercentSign(g_showPercentSign);
     widget::SetBackground(g_widgetBackground);  // remembered by the widget across re-creation
     i18n::Init();
     g_widgetMonitor = LoadWidgetMonitor();

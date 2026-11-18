@@ -1,0 +1,111 @@
+# Tiếng Việt (vi).
+@code = vi
+@name = Tiếng Việt
+
+# Menus, status and notifications
+off / not connected = đã tắt / chưa kết nối
+{percent}% (last known) = {percent}% (lần ghi nhận cuối)
+unknown = chưa rõ
+charging = đang sạc
+asleep = đang nghỉ
+No devices with battery info found = Không tìm thấy thiết bị có thông tin pin
+Low battery = Pin yếu
+{name} is at {percent}% = {name} còn {percent}% pin
+Point at a device to show, hide or move it = Trỏ vào thiết bị để hiện, ẩn hoặc di chuyển
+Show on the taskbar = Hiện trên thanh tác vụ
+Show in the tray = Hiện trong vùng thông báo
+Move left = Chuyển sang trái
+Move up = Chuyển lên trên
+Move right = Chuyển sang phải
+Move down = Chuyển xuống dưới
+Hide last known / asleep devices = Ẩn thiết bị đang nghỉ / chỉ còn dữ liệu cũ
+Show on the taskbar (icon + percentage) = Hiện trên thanh tác vụ (biểu tượng + phần trăm)
+Show as tray icons = Hiện dưới dạng biểu tượng trong vùng thông báo
+Background behind taskbar text (for transparent taskbars) = Nền sau chữ trên thanh tác vụ (dành cho thanh tác vụ trong suốt)
+Icons above percentages (narrower) = Biểu tượng phía trên phần trăm (gọn hơn)
+Show percent sign (%) = Hiện dấu phần trăm (%)
+All monitors = Tất cả màn hình
+Main monitor only = Chỉ màn hình chính
+{monitor} only = Chỉ {monitor}
+Chosen monitor (not connected, shown on main) = Màn hình đã chọn (chưa kết nối, hiện trên màn hình chính)
+Show the widget on = Hiện tiện ích trên
+Brand colors (Razer green, Logitech blue, ...) = Màu thương hiệu (Razer xanh lá, Logitech xanh dương, ...)
+Automatic (Windows language) = Tự động (theo ngôn ngữ Windows)
+Add your own language... = Thêm bản dịch của bạn...
+Language = Ngôn ngữ
+Refresh now = Làm mới ngay
+Start with Windows = Khởi động cùng Windows
+Request support for a device... = Yêu cầu hỗ trợ thiết bị...
+Support the project... = Ủng hộ dự án...
+Exit = Thoát
+Thank you! Your request was sent. You can follow it at {page}. = Cảm ơn bạn! Yêu cầu đã được gửi. Bạn có thể theo dõi tại {page}.
+You already sent this device in the last 24 hours, so it's on the list. Thank you! = Bạn đã gửi thiết bị này trong 24 giờ qua nên thiết bị đã có trong danh sách. Cảm ơn bạn!
+The request was not accepted: {reason} = Yêu cầu không được chấp nhận: {reason}
+please check the fields. = vui lòng kiểm tra các thông tin đã nhập.
+Too many requests from your network. Please try again in an hour. = Có quá nhiều yêu cầu từ mạng của bạn. Vui lòng thử lại sau một giờ.
+Couldn't reach krisgfx.com. Check your connection, or use "Copy full report" and post it on GitHub. = Không thể kết nối tới krisgfx.com. Hãy kiểm tra kết nối hoặc dùng "Sao chép báo cáo đầy đủ" rồi đăng lên GitHub.
+The site answered with an error ({code}). Please try again later. = Trang web trả về lỗi ({code}). Vui lòng thử lại sau.
+Device = Thiết bị
+(type the device name) = (nhập tên thiết bị)
+Type = Loại
+Your name = Tên bạn
+(not sent) = (không được gửi đi)
+(kept private) = (được giữ kín)
+Notes = Ghi chú
+My device is not in this list = Thiết bị của tôi không có trong danh sách
+Pick the device that isn't shown. Devices with a vendor-specific interface are listed first. = Chọn thiết bị chưa được hiển thị. Thiết bị có giao diện riêng của nhà sản xuất được liệt kê trước.
+Is one of your devices not shown? Pick it below and send it to us. It goes on the public request list at krisgfx.com/tools, and we'll look into supporting it. = Thiết bị của bạn chưa được hiển thị? Hãy chọn bên dưới và gửi cho chúng tôi. Thiết bị sẽ được đưa vào danh sách yêu cầu công khai tại krisgfx.com/tools để chúng tôi xem xét hỗ trợ.
+Scanning devices... = Đang quét thiết bị...
+Device name (as it's sold) = Tên thương mại của thiết bị
+Your name (optional, kept private and never shown) = Tên bạn (không bắt buộc, được giữ kín và không hiển thị)
+Anything else we should know? (optional) = Thông tin bổ sung (không bắt buộc)
+This is exactly what will be sent: = Toàn bộ thông tin sẽ được gửi:
+Scanning your devices... = Đang quét các thiết bị của bạn...
+Copy full report = Sao chép báo cáo đầy đủ
+Send = Gửi
+Close = Đóng
+The full report is copied. Paste it into a GitHub issue if we ask for more details. = Đã sao chép báo cáo đầy đủ. Hãy dán vào mục báo lỗi trên GitHub nếu chúng tôi cần thêm thông tin.
+Sending... = Đang gửi...
+Collecting the full report (this takes about 10 seconds)... = Đang thu thập báo cáo đầy đủ (mất khoảng 10 giây)...
+request support for a device = yêu cầu hỗ trợ thiết bị
+Other monitor = Màn hình khác
+Display {number} = Màn hình {number}
+
+# Monitor positions
+left = bên trái
+right = bên phải
+above = phía trên
+below = phía dưới
+
+# Coarse battery levels
+Full = Đầy
+Good = Tốt
+Medium = Vừa
+Low = Thấp
+Critical = Rất yếu
+Empty = Cạn
+
+# Device types
+mouse = chuột
+keyboard = bàn phím
+headset = tai nghe
+controller = tay cầm
+other = khác
+
+# Connection types
+2.4 GHz dongle = bộ thu 2.4 GHz
+2.4 GHz dongle or USB = bộ thu 2.4 GHz hoặc USB
+2.4 GHz receiver = bộ thu 2.4 GHz
+2.4 GHz receiver / USB = bộ thu 2.4 GHz / USB
+2.4 GHz receiver or USB = bộ thu 2.4 GHz hoặc USB
+Base station = Trạm gốc
+BT600 adapter = bộ chuyển đổi BT600
+Corsair receiver = bộ thu Corsair
+Jabra Link dongle = bộ thu Jabra Link
+Logitech receiver = bộ thu Logitech
+Razer receiver = bộ thu Razer
+USB / Bluetooth = USB / Bluetooth
+USB base station = trạm gốc USB
+USB cable = cáp USB
+UWB base station = trạm gốc UWB
+Wireless adapter = Bộ chuyển đổi không dây
