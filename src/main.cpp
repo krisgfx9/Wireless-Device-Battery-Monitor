@@ -32,7 +32,7 @@ constexpr UINT PLACEHOLDER_ID = 1;
 
 enum MenuId : UINT {
     ID_REFRESH = 100, ID_AUTOSTART, ID_HIDE_LAST_KNOWN, ID_WIDGET_BACKGROUND, ID_EXIT, ID_MODE_WIDGET, ID_MODE_TRAY, ID_SUPPORT, ID_REPORT,
-    ID_BRAND_COLORS, ID_STACKED,
+    ID_BRAND_COLORS, ID_STACKED, ID_TASKBARX_EXPERIMENTAL = 120,
     ID_LANG_AUTO = 400, ID_LANG_ADD, ID_LANG_FIRST,  // "Language": ID_LANG_FIRST + 0..63
     ID_MONITOR_ALL = 300, ID_MONITOR_MAIN, ID_MONITOR_FIRST,  // "Show the widget on": ID_MONITOR_FIRST + 0..31
     ID_DEVICE_FIRST = 1000
@@ -57,6 +57,7 @@ std::wstring g_widgetMonitor = L"all";  // which taskbars show the widget: "all"
 bool g_widgetBackground = false;  // draw a plate behind the taskbar text (transparent taskbar themes)
 bool g_stacked = false;      // icon above the percentage (menu option)
 bool g_brandColors = false;  // off by default; known brands get their color (Razer green, Logitech blue, ...)
+bool g_taskbarxExperimental = false;  // opt-in to widget with TaskbarX, without reserving button space
 
 struct TrayEntry {
     UINT uid = 0;
@@ -645,6 +646,8 @@ void ShowMenu() {
     AppendMenuW(m, MF_STRING | (g_wantWidget ? MF_CHECKED : 0), ID_MODE_WIDGET, T(L"Show on the taskbar (icon + percentage)"));
     AppendMenuW(m, MF_STRING | (!g_wantWidget ? MF_CHECKED : 0), ID_MODE_TRAY, T(L"Show as tray icons"));
     CheckMenuRadioItem(m, ID_MODE_WIDGET, ID_MODE_TRAY, g_wantWidget ? ID_MODE_WIDGET : ID_MODE_TRAY, MF_BYCOMMAND);
+    AppendMenuW(m, MF_STRING | (g_taskbarxExperimental ? MF_CHECKED : 0), ID_TASKBARX_EXPERIMENTAL,
+                T(L"Experimental: keep widget on taskbar with TaskbarX (may overlap)"));
     UINT bgFlags = MF_STRING | (g_widgetBackground ? MF_CHECKED : 0) | (g_wantWidget ? 0 : MF_GRAYED);
     AppendMenuW(m, bgFlags, ID_WIDGET_BACKGROUND, T(L"Background behind taskbar text (for transparent taskbars)"));
     AppendMenuW(m, MF_STRING | (g_stacked ? MF_CHECKED : 0) | (g_wantWidget ? 0 : MF_GRAYED), ID_STACKED, T(L"Icons above percentages (narrower)"));
@@ -713,6 +716,12 @@ void ShowMenu() {
         case ID_MONITOR_MAIN: SetWidgetMonitor(L"main"); break;
         case ID_BRAND_COLORS: SetBrandColors(!g_brandColors); break;
         case ID_STACKED: SetStacked(!g_stacked); break;
+        case ID_TASKBARX_EXPERIMENTAL:
+            g_taskbarxExperimental = !g_taskbarxExperimental;
+            SaveBoolSetting(L"TaskbarXExperimentalWidget", g_taskbarxExperimental);
+            widget::SetTaskbarXExperimental(g_taskbarxExperimental);
+            Reconcile();
+            break;
         case ID_MODE_WIDGET: SetMode(true); break;
         case ID_MODE_TRAY: SetMode(false); break;
         case ID_SUPPORT: ShellExecuteW(nullptr, L"open", L"https://github.com/sponsors/krisgfx9", nullptr, nullptr, SW_SHOWNORMAL); break;
@@ -957,6 +966,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     g_refreshEvt = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     g_stopEvt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_wantWidget = LoadWidgetMode();
+    g_taskbarxExperimental = LoadBoolSetting(L"TaskbarXExperimentalWidget", false);
+    widget::SetTaskbarXExperimental(g_taskbarxExperimental);
     g_hideLastKnown = LoadHideLastKnown();
     g_widgetBackground = LoadWidgetBackground();
     g_brandColors = LoadBrandColors();
