@@ -19,3 +19,16 @@ The setting is stored at `HKCU\\Software\\WirelessBattery\\TaskbarXExperimentalW
 - Run the `TaskbarX experimental widget build` workflow after updating this branch.
 
 This is an experiment, not a guarantee of collision-free placement. The initial verification target is Windows 10 22H2 / TaskbarX 1.7.8.0.
+
+
+## User validation (2026-11-18)
+
+Tested by the user on Windows 10 22H2 (build 19045) with TaskbarX 1.7.8.0 and Wireless Device Battery Monitor 1.0.8.
+
+- The experimental setting was enabled and the widget behaved as intended: it remained on the taskbar while TaskbarX was running.
+- The user confirmed the widget worked as expected in the test (including the previously tested demo mode).
+- **Known limitation confirmed:** the widget can overlap application taskbar icons.
+- This is acceptable for the user's workflow, which normally uses icon-only taskbar buttons and does not keep many applications open. The user also expects to connect relatively few 2.4 GHz devices.
+- The setting remains opt-in and off by default. If the overlap is inconvenient, disable the experimental setting to revert to tray icons while TaskbarX is active.
+
+This is a successful user-environment test of the intended behavior, with the overlap limitation documented; it is not a claim that placement is collision-free for all taskbar layouts.
