@@ -1,18 +1,21 @@
-# TaskbarX compatibility patch
+# TaskbarX compatibility patch — experimental widget mode
 
-This branch carries a small compatibility patch for Windows 10 systems running TaskbarX.
+This branch is based on the safe fallback branch and adds an opt-in experiment for Windows 10 systems running TaskbarX.
 
-## Behavior
+## Modes
 
-If `TaskbarX.exe` or the legacy `FalconX.exe` process is detected, Wireless Battery does not create its taskbar widget. It uses the existing system-tray icon mode instead, avoiding its normal `ReBarWindow32` resizing logic, which can compete with TaskbarX's taskbar layout changes.
+- **Safe default:** if `TaskbarX.exe` or legacy `FalconX.exe` is detected, the widget is not created; battery indicators use tray icons.
+- **Experimental opt-in:** the menu item *Experimental: keep widget on taskbar with TaskbarX (may overlap)* allows the widget to be created beside the notification area. In this mode, Wireless Battery deliberately does not resize `ReBarWindow32`, avoiding direct interference with TaskbarX's task-button layout. The widget may overlap app buttons if the taskbar is crowded; this has to be tested on the user's setup.
+- With TaskbarX stopped, the normal widget behavior remains, including reserving space when needed.
 
-The widget's `Alive()` check also re-detects TaskbarX so the app can reconcile the display mode when TaskbarX is started or stopped while Wireless Battery is already running.
+The setting is stored at `HKCU\\Software\\WirelessBattery\\TaskbarXExperimentalWidget` and defaults to off. Changing it takes effect immediately; turn it off to return to tray icons when TaskbarX is active.
 
-## Keeping this patch after upstream updates
+## Keeping the patch after upstream updates
 
 - Keep the fork's `main` branch synchronized with upstream as usual.
 - Bring the updated `main` into this compatibility branch (merge or rebase).
-- If `src/widget.cpp` conflicts, retain the `TaskbarXRunning()` helper, the early return in `widget::Create()`, and the TaskbarX check in `widget::Alive()`. Re-check the surrounding taskbar-widget code if upstream changes it.
-- Run the `TaskbarX compatibility test build` workflow after updating this branch.
+- If `src/widget.cpp` conflicts, retain `TaskbarXRunning()`, the experimental flag, the early return when experimental mode is off, and the logic that leaves `g_rebar` null while TaskbarX is active. Re-check taskbar positioning and layout code if upstream changes it.
+- Keep the menu setting and its registry persistence in `src/main.cpp`, plus the API in `src/widget.h`.
+- Run the `TaskbarX experimental widget build` workflow after updating this branch.
 
-This is a conservative fallback, not a claim that every TaskbarX version has been tested. The actual behavior still needs verification on the Windows 10 22H2 / TaskbarX 1.7.8.0 setup that reported the conflict.
+This is an experiment, not a guarantee of collision-free placement. The initial verification target is Windows 10 22H2 / TaskbarX 1.7.8.0.
