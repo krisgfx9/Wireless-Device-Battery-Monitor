@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "devices.h"
+#include "reading_freshness.h"
 #include "i18n.h"
 #include "labels.h"
 #include "report.h"
@@ -57,12 +58,14 @@ std::wstring g_widgetMonitor = L"all";  // which taskbars show the widget: "all"
 bool g_widgetBackground = false;  // draw a plate behind the taskbar text (transparent taskbar themes)
 bool g_stacked = false;      // icon above the percentage (menu option)
 bool g_brandColors = false;  // off by default; known brands get their color (Razer green, Logitech blue, ...)
+bool g_demoFreshness = false; // optional synthetic stale reading for --demo-freshness
 
 struct TrayEntry {
     UINT uid = 0;
     DeviceStatus st;
     int lastPct = -1;        // last known percentage, kept while the device sleeps
-    ULONGLONG lastSeen = 0;
+    ULONGLONG lastSeen = 0;         // last device appearance, for existing grace period
+    ULONGLONG lastReadingTick = 0;  // last valid battery sample, independently of lastSeen
     bool added = false;
     bool lowWarned = false;
     std::wstring iconSig;    // what the current icon shows, to avoid needless redraws
@@ -323,6 +326,30 @@ HICON IconFor(int pct, bool charging, bool dim, Accent accent) {
     return RenderIcon(t, pct, text, bar, dim);
 }
 
+// UI labels derived from the last valid percentage read, never from a failed poll.
+std::wstring ReadingAgeText(ULONGLONG lastTick) {
+    ULONGLONG now = GetTickCount64();
+    ULONGLONG age = reading_freshness::AgeMinutes(lastTick, now);
+    if (age == 0) return T(L"just now");
+    if (age < 60) return TF(L"{count} min ago", { { L"count", std::to_wstring(age) } });
+    if (age < 1440) return TF(L"{count} h ago", { { L"count", std::to_wstring(age / 60) } });
+    return TF(L"{count} d ago", { { L"count", std::to_wstring(age / 1440) } });
+}
+
+std::wstring FreshnessText(const TrayEntry& e) {
+    if (!e.lastReadingTick) return L"";
+    std::wstring age = ReadingAgeText(e.lastReadingTick);
+    switch (reading_freshness::Classify(e.lastReadingTick, GetTickCount64())) {
+        case reading_freshness::State::Fresh:
+            return TF(L"Last reading: {age}", { { L"age", age } });
+        case reading_freshness::State::Delayed:
+            return TF(L"Delayed reading: {age}", { { L"age", age } });
+        case reading_freshness::State::Stale:
+            return TF(L"Stale reading: {age}", { { L"age", age } });
+        default: return L"";
+    }
+}
+
 // ---- tray management --------------------------------------------------------------------------
 
 void CopyTip(wchar_t* dst, size_t cap, const std::wstring& s) {
@@ -332,7 +359,11 @@ void CopyTip(wchar_t* dst, size_t cap, const std::wstring& s) {
 
 std::wstring StatusText(const TrayEntry& e) {
     const auto& s = e.st;
-    if (!s.connected) return T(L"off / not connected");
+    if (!s.connected) {
+        std::wstring t = T(L"off / not connected");
+        if (e.lastReadingTick) t += L", " + FreshnessText(e);
+        return t;
+    }
     std::wstring t;
     if (!s.levelText.empty() && s.percent >= 0) t = T(s.levelText);
     else if (s.percent >= 0) t = std::to_wstring(s.percent) + L"%";
@@ -341,6 +372,7 @@ std::wstring StatusText(const TrayEntry& e) {
     if (!s.detail.empty() && s.percent >= 0) t += L" (" + s.detail + L")";
     if (s.charging) t += std::wstring(L", ") + T(L"charging");
     if (s.asleep) t += std::wstring(L", ") + T(L"asleep");
+    if (e.lastReadingTick) t += L", " + FreshnessText(e);
     return t;
 }
 
@@ -398,21 +430,22 @@ void ApplyEntry(TrayEntry& e) {
         return;
     }
     int shown = s.percent >= 0 ? s.percent : e.lastPct;
-    bool dim = s.percent < 0;
+    bool dim = reading_freshness::ShouldDim(s.percent, s.asleep, e.lastReadingTick, GetTickCount64());
+    bool charging = s.charging && !dim; // do not draw cached charge state as live
     Accent accent = AccentFor(s);
-    std::wstring sig = std::to_wstring(shown) + (s.charging ? L"c" : L"") + (dim ? L"d" : L"") + (g_lightTaskbar ? L"l" : L"k") +
+    std::wstring sig = std::to_wstring(shown) + (charging ? L"c" : L"") + (dim ? L"d" : L"") + (g_lightTaskbar ? L"l" : L"k") +
                        L"a" + std::to_wstring((int)accent);
     if (sig != e.iconSig || !e.icon) {
         if (e.icon) DestroyIcon(e.icon);
-        e.icon = IconFor(shown, s.charging, dim, accent);
+        e.icon = IconFor(shown, charging, dim, accent);
         e.iconSig = sig;
     }
     std::wstring tip = s.name + L"\n" + StatusText(e);
 
     const wchar_t* infoTitle = nullptr;
     std::wstring info;
-    if (s.charging || shown > LOW_BATTERY + 10) e.lowWarned = false;
-    if (!s.charging && s.percent >= 0 && s.percent <= LOW_BATTERY && !e.lowWarned) {
+    if (!dim && (s.charging || shown > LOW_BATTERY + 10)) e.lowWarned = false;
+    if (!dim && !s.charging && s.percent >= 0 && s.percent <= LOW_BATTERY && !e.lowWarned) {
         e.lowWarned = true;
         infoTitle = T(L"Low battery");
         info = TF(L"{name} is at {percent}%", { { L"name", s.name }, { L"percent", std::to_wstring(s.percent) } });
@@ -469,9 +502,9 @@ void UpdateWidget() {
         it.kind = e->st.kind;
         it.percent = e->st.percent >= 0 ? e->st.percent : e->lastPct;
         if (e->st.percent >= 0) it.text = T(e->st.levelText);
-        it.charging = e->st.charging;
-        it.dim = e->st.percent < 0;
-        it.low = !it.charging && it.percent >= 0 && it.percent <= LOW_BATTERY;
+        it.dim = reading_freshness::ShouldDim(e->st.percent, e->st.asleep, e->lastReadingTick, GetTickCount64());
+        it.charging = e->st.charging && !it.dim;
+        it.low = !it.dim && !it.charging && it.percent >= 0 && it.percent <= LOW_BATTERY;
         it.bluetooth = e->st.via == L"Bluetooth";
         it.label = labels[items.size()];
         it.accent = AccentFor(e->st);
@@ -489,8 +522,17 @@ void OnResults(std::vector<DeviceStatus>& results) {
         auto& e = g_entries[s.key];
         if (!e.uid) e.uid = StableId(s.key);
         e.st = s;
-        if (s.percent >= 0) e.lastPct = s.percent;
-        e.lastSeen = GetTickCount64();
+        ULONGLONG now = GetTickCount64();
+        if (reading_freshness::Confirmed(s.percent, s.connected, s.asleep)) {
+            e.lastPct = s.percent;
+            e.lastReadingTick = now ? now : 1;
+        }
+        // A deterministic stale sample for UI testing without real wireless hardware.
+        if (g_demoFreshness && s.key == L"demo:freshness" && !e.lastReadingTick) {
+            e.lastPct = 42;
+            e.lastReadingTick = now > 12ULL * 60000 ? now - 12ULL * 60000 : 1;
+        }
+        e.lastSeen = now;
         seen[s.key] = true;
         ApplyEntry(e);
     }
@@ -513,6 +555,18 @@ void OnResults(std::vector<DeviceStatus>& results) {
         }
     }
     UpdatePlaceholder();
+    UpdateWidget();
+}
+
+// Updates elapsed-age labels even when there are no new poll results. The existing
+// 1-second widget timer calls this at most every 30 seconds, avoiding redraw churn.
+void RefreshReadingAges() {
+    static ULONGLONG lastUpdate = 0;
+    ULONGLONG now = GetTickCount64();
+    if (lastUpdate && now - lastUpdate < 30000) return;
+    lastUpdate = now;
+    if (g_entries.empty()) return;
+    for (auto& [key, e] : g_entries) if (e.added) ApplyEntry(e);
     UpdateWidget();
 }
 
@@ -753,7 +807,7 @@ std::vector<DeviceStatus> DemoDevices() {
         s.via = L"demo";
         return s;
     };
-    return {
+    std::vector<DeviceStatus> devices = {
         make(L"razer:demo", L"Razer DeathAdder V3 Pro", DeviceKind::Mouse, 78, 0x1532, false),
         make(L"demo:logi", L"Logitech G PRO X 2 LIGHTSPEED", DeviceKind::Headset, 64, 0x046D, false),
         make(L"steelseries:demo", L"SteelSeries Arctis Nova 7", DeviceKind::Headset, 55, 0, false),
@@ -771,6 +825,12 @@ std::vector<DeviceStatus> DemoDevices() {
         make(L"steam:demo", L"Steam Controller", DeviceKind::Gamepad, 50, 0x28DE, true),
         make(L"bt:demo-plain", L"Bluetooth Headphones", DeviceKind::Headset, 100, 0, false),
     };
+    if (g_demoFreshness) {
+        DeviceStatus stale = make(L"demo:freshness", L"Stale battery sample", DeviceKind::Mouse, -1, 0, false);
+        stale.asleep = true;
+        devices.push_back(stale);
+    }
+    return devices;
 }
 
 DWORD WINAPI Worker(LPVOID) {
@@ -825,7 +885,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             return TRUE;
         case WM_TIMER:
             if (wp == TIMER_DEBOUNCE) { KillTimer(h, TIMER_DEBOUNCE); SetEvent(g_refreshEvt); }
-            if (wp == TIMER_WIDGET) Reconcile();
+            if (wp == TIMER_WIDGET) { Reconcile(); RefreshReadingAges(); }
             return 0;
         case WM_SETTINGCHANGE:
             if (lp && !lstrcmpW((LPCWSTR)lp, L"ImmersiveColorSet")) {
@@ -931,6 +991,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
         return 0;
     }
     g_inst = inst;
+    g_demoFreshness = cmdLine && wcsstr(cmdLine, L"--demo-freshness");
     g_demo = cmdLine && wcsstr(cmdLine, L"--demo");
 
     HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Local\\WirelessBatteryTray");

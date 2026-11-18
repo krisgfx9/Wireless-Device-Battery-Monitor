@@ -252,6 +252,24 @@ Phase 1 covers Logitech, Razer, SteelSeries, Corsair, HyperX, PlayStation, Coole
 Finalmouse and the shared Kysona/Pulsar/ATK/G-Wolves protocols. Bluetooth/UPower fallbacks, HeadsetControl and
 the remaining vendors are planned follow-up phases.
 
+
+### Battery reading freshness
+
+Wireless Battery distinguishes the **most recent confirmed percentage reading** from a cached/last-known value.
+The widget dims values that are at least **10 minutes** old; taskbar/tray tooltips and device menus
+show the elapsed time since the last confirmed read, with a **Delayed** label after 3 minutes
+and a **Stale** label after 10 minutes. A new valid reading immediately restores the normal state.
+
+A valid reading means the device was connected, not marked asleep, and reported 0–100% during
+the latest poll. An unchanged percentage can still be a fresh poll result: the app cannot infer
+when the device's firmware measured it. Invalid, sleeping and disconnected results **never**
+refresh the timestamp. Times use the Windows monotonic clock, are per-session only, and do not
+require disk writes, extra HID queries, or network requests.
+
+Test without hardware: run `WirelessBattery.exe --demo-freshness` to show a synthetic
+**Stale battery sample** (42%, last reported 12 minutes ago) alongside the usual demo devices.
+This mode does not modify settings or persist samples.
+
 ## Limitations
 
 - **Primary monitor only:** the taskbar widget sits on the primary monitor's taskbar.
