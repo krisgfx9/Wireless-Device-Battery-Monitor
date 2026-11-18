@@ -177,6 +177,7 @@ void PollBluetooth(PollContext& ctx) {
     std::map<std::wstring, std::wstring> containerCat;   // container id -> device container category
     std::map<std::wstring, bool> containerConn;          // container id -> main BT device node connected
     std::map<std::wstring, Found> battery;
+    std::set<std::wstring> apple;                        // container ids with an Apple (Bluetooth SIG 0x004C) profile node
     SP_DEVINFO_DATA dd{ sizeof(dd) };
     for (DWORD i = 0; SetupDiEnumDeviceInfo(di, i, &dd); i++) {
         wchar_t inst[512];
@@ -205,6 +206,11 @@ void PollBluetooth(PollContext& ctx) {
                 t == DEVPROP_TYPE_BOOLEAN)
                 containerConn[cid] = conn != DEVPROP_FALSE;
         }
+        // Profile nodes carry the Bluetooth vendor id (BTHENUM\{service}_VID&0001004c_PID&...): Apple
+        // headphones keep their user-given name, so this is how AirPods are recognised.
+        std::wstring up = inst;
+        for (auto& ch : up) ch = towupper(ch);
+        if (up.find(L"_VID&0001004C") != std::wstring::npos) apple.insert(cid);
 
         BYTE pct = 0;
         if (!SetupDiGetDevicePropertyW(di, &dd, &kBtBattery, &t, &pct, sizeof(pct), nullptr, 0) || t != DEVPROP_TYPE_BYTE) continue;
@@ -263,5 +269,20 @@ void PollBluetooth(PollContext& ctx) {
         if (s.kind == DeviceKind::Other) s.kind = GuessKind(s.name);
         ctx.out.push_back(s);
         ctx.btContainers.insert(cid);
+    }
+
+    // AirPods / Beats: connected, but Windows has no battery level for them.
+    for (auto& [cid, name] : containerName) {
+        auto mc = containerConn.find(cid);
+        if (battery.count(cid) || reported.count(cid) || mc == containerConn.end() || !mc->second ||
+            !(apple.count(cid) || IsAppleAudioName(name)))
+            continue;
+        DeviceStatus s;
+        if (!AppleBudsStatus(s)) continue;
+        s.key = L"bt:" + cid;
+        s.name = name;
+        s.via = L"Bluetooth";
+        s.graceSec = 1800;  // buds back in the closed case stop advertising
+        ctx.out.push_back(s);
     }
 }

@@ -19,6 +19,7 @@
 
 #include "devices.h"
 #include "hid.h"
+#include "i18n.h"
 
 namespace {
 
@@ -357,6 +358,12 @@ std::wstring JsonError(const std::string& reply) {
     return Wide(v);
 }
 
+std::wstring Sent() {
+    wchar_t msg[200];
+    swprintf(msg, 200, T(L"Thank you! Your request was sent. You can follow it at %s."), kRequestedPage);
+    return msg;
+}
+
 std::wstring SendRequest(Request req) {
     std::string reply;
     int status = Post(RequestJson(req), reply);
@@ -365,18 +372,20 @@ std::wstring SendRequest(Request req) {
         reply.clear();
         status = Post(RequestJson(req), reply);
     }
-    if (status == 201) return std::wstring(L"Thank you! Your request was sent. You can follow it at ") + kRequestedPage + L".";
+    if (status == 201) return Sent();
     if (status == 200)
         return reply.find("\"repeat\":true") != std::string::npos
-                   ? L"You already sent this device in the last 24 hours, so it's on the list. Thank you!"
-                   : std::wstring(L"Thank you! Your request was sent. You can follow it at ") + kRequestedPage + L".";
+                   ? std::wstring(T(L"You already sent this device in the last 24 hours, so it's on the list. Thank you!"))
+                   : Sent();
     if (status == 400) {
         std::wstring e = JsonError(reply);
-        return L"The request was not accepted: " + (e.empty() ? std::wstring(L"please check the fields.") : e);
+        return T(L"The request was not accepted: ") + (e.empty() ? std::wstring(T(L"please check the fields.")) : e);
     }
-    if (status == 429) return L"Too many requests from your network. Please try again in an hour.";
-    if (status == 0) return L"Couldn't reach krisgfx.com. Check your connection, or use \"Copy full report\" and post it on GitHub.";
-    return L"The site answered with an error (" + std::to_wstring(status) + L"). Please try again later.";
+    if (status == 429) return T(L"Too many requests from your network. Please try again in an hour.");
+    if (status == 0) return T(L"Couldn't reach krisgfx.com. Check your connection, or use \"Copy full report\" and post it on GitHub.");
+    wchar_t msg[160];
+    swprintf(msg, 160, T(L"The site answered with an error (%d). Please try again later."), status);
+    return msg;
 }
 
 // ---- window ---------------------------------------------------------------------------------------
@@ -423,8 +432,10 @@ Request CurrentRequest() {
 
 void UpdatePreview() {
     Request r = CurrentRequest();
-    std::wstring p = L"Device: " + (r.model.empty() ? L"(type the device name)" : r.model) + L"\r\nType: " + r.type +
-                     L"\r\nYour name: " + (r.name.empty() ? L"(not sent)" : r.name + L" (kept private)") + L"\r\nNotes: ";
+    // The labels are translated; the values are exactly what is sent.
+    std::wstring p = T(L"Device: ") + (r.model.empty() ? std::wstring(T(L"(type the device name)")) : r.model) + L"\r\n" + T(L"Type: ") +
+                     r.type + L"\r\n" + T(L"Your name: ") + (r.name.empty() ? std::wstring(T(L"(not sent)")) : r.name + T(L" (kept private)")) +
+                     L"\r\n" + T(L"Notes: ");
     for (wchar_t ch : r.notes) p += ch == L'\n' ? std::wstring(L"\r\n") : std::wstring(1, ch);
     SetDlgItemTextW(g_wnd, IDC_PREVIEW, p.c_str());
     EnableWindow(GetDlgItem(g_wnd, IDC_SEND), !g_sending && DeviceChosen() && r.model.size() >= 2);
@@ -451,9 +462,9 @@ void FillDevices() {
         swprintf(ids, 16, L"%04X:%04X", c.vid, c.pid);
         SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)(c.name + L"  (" + ids + L")").c_str());
     }
-    SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)L"My device is not in this list");
+    SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)T(L"My device is not in this list"));
     EnableWindow(cb, TRUE);
-    SetStatus(L"Pick the device that isn't shown. Devices with a vendor-specific interface are listed first.");
+    SetStatus(T(L"Pick the device that isn't shown. Devices with a vendor-specific interface are listed first."));
     UpdatePreview();
 }
 
@@ -477,34 +488,34 @@ void CreateControls() {
     MakeFont();
     const int L = 16, W = 428;
     Add(L"STATIC",
-        L"Is one of your devices not shown? Pick it below and send it to us. It goes on the public request list at "
-        L"krisgfx.com/tools, and we'll look into supporting it.",
+        T(L"Is one of your devices not shown? Pick it below and send it to us. It goes on the public request list at "
+          L"krisgfx.com/tools, and we'll look into supporting it."),
         0, -1, L, 12, W, 40);
-    Add(L"STATIC", L"Device", 0, -1, L, 58, W, 18);
+    Add(L"STATIC", T(L"Device"), 0, -1, L, 58, W, 18);
     HWND dev = Add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, IDC_DEVICE, L, 76, W, 300);
-    SendMessageW(dev, CB_ADDSTRING, 0, (LPARAM)L"Scanning devices...");
+    SendMessageW(dev, CB_ADDSTRING, 0, (LPARAM)T(L"Scanning devices..."));
     SendMessageW(dev, CB_SETCURSEL, 0, 0);
     EnableWindow(dev, FALSE);
-    Add(L"STATIC", L"Device name (as it's sold)", 0, -1, L, 108, W, 18);
+    Add(L"STATIC", T(L"Device name (as it's sold)"), 0, -1, L, 108, W, 18);
     HWND model = Add(WC_EDITW, L"", ES_AUTOHSCROLL | WS_TABSTOP, IDC_MODEL, L, 126, W, 24, WS_EX_CLIENTEDGE);
     SendMessageW(model, EM_LIMITTEXT, 80, 0);
-    Add(L"STATIC", L"Type", 0, -1, L, 158, W, 18);
+    Add(L"STATIC", T(L"Type"), 0, -1, L, 158, W, 18);
     HWND type = Add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP, IDC_TYPE, L, 176, 200, 200);
-    for (auto t : kTypes) SendMessageW(type, CB_ADDSTRING, 0, (LPARAM)t);
+    for (auto t : kTypes) SendMessageW(type, CB_ADDSTRING, 0, (LPARAM)T(t));  // shown translated, sent as kTypes
     SendMessageW(type, CB_SETCURSEL, 4, 0);
-    Add(L"STATIC", L"Your name (optional, kept private and never shown)", 0, -1, L, 208, W, 18);
+    Add(L"STATIC", T(L"Your name (optional, kept private and never shown)"), 0, -1, L, 208, W, 18);
     HWND name = Add(WC_EDITW, L"", ES_AUTOHSCROLL | WS_TABSTOP, IDC_NAME, L, 226, W, 24, WS_EX_CLIENTEDGE);
     SendMessageW(name, EM_LIMITTEXT, 40, 0);
-    Add(L"STATIC", L"Anything else we should know? (optional)", 0, -1, L, 258, W, 18);
+    Add(L"STATIC", T(L"Anything else we should know? (optional)"), 0, -1, L, 258, W, 18);
     HWND notes = Add(WC_EDITW, L"", ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP, IDC_NOTES, L, 276, W, 54,
                      WS_EX_CLIENTEDGE);
     SendMessageW(notes, EM_LIMITTEXT, 200, 0);
-    Add(L"STATIC", L"This is exactly what will be sent:", 0, -1, L, 338, W, 18);
+    Add(L"STATIC", T(L"This is exactly what will be sent:"), 0, -1, L, 338, W, 18);
     Add(WC_EDITW, L"", ES_MULTILINE | ES_READONLY | WS_VSCROLL | WS_TABSTOP, IDC_PREVIEW, L, 356, W, 110, WS_EX_CLIENTEDGE);
-    Add(L"STATIC", L"Scanning your devices...", 0, IDC_STATUS, L, 474, W, 36);
-    Add(WC_BUTTONW, L"Copy full report", WS_TABSTOP, IDC_COPY, L, 516, 140, 28);
-    Add(WC_BUTTONW, L"Send", BS_DEFPUSHBUTTON | WS_TABSTOP, IDC_SEND, L + W - 186, 516, 90, 28);
-    Add(WC_BUTTONW, L"Close", WS_TABSTOP, IDCANCEL, L + W - 90, 516, 90, 28);
+    Add(L"STATIC", T(L"Scanning your devices..."), 0, IDC_STATUS, L, 474, W, 36);
+    Add(WC_BUTTONW, T(L"Copy full report"), WS_TABSTOP, IDC_COPY, L, 516, 140, 28);
+    Add(WC_BUTTONW, T(L"Send"), BS_DEFPUSHBUTTON | WS_TABSTOP, IDC_SEND, L + W - 186, 516, 90, 28);
+    Add(WC_BUTTONW, T(L"Close"), WS_TABSTOP, IDCANCEL, L + W - 90, 516, 90, 28);
     EnableWindow(GetDlgItem(g_wnd, IDC_SEND), FALSE);
 }
 
@@ -584,7 +595,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             std::unique_ptr<std::wstring> s((std::wstring*)lp);
             CopyToClipboard(*s);
             EnableWindow(GetDlgItem(h, IDC_COPY), TRUE);
-            SetStatus(L"The full report is copied. Paste it into a GitHub issue if we ask for more details.");
+            SetStatus(T(L"The full report is copied. Paste it into a GitHub issue if we ask for more details."));
             return 0;
         }
         case WM_COMMAND: {
@@ -596,13 +607,13 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if ((id == IDC_SEND || id == IDOK) && IsWindowEnabled(GetDlgItem(h, IDC_SEND))) {
                 g_sending = true;
                 EnableWindow(GetDlgItem(h, IDC_SEND), FALSE);
-                SetStatus(L"Sending...");
+                SetStatus(T(L"Sending..."));
                 StartThread(SendThread, new SendJob{ h, CurrentRequest() });
                 return 0;
             }
             if (id == IDC_COPY) {
                 EnableWindow(GetDlgItem(h, IDC_COPY), FALSE);
-                SetStatus(L"Collecting the full report (this takes about 10 seconds)...");
+                SetStatus(T(L"Collecting the full report (this takes about 10 seconds)..."));
                 const Candidate* c = Selected();
                 std::wstring header = L"Wireless Battery device report\nWindows build " + WindowsBuild() + L"\n";
                 if (c) {
@@ -669,7 +680,7 @@ void Show(HINSTANCE inst, HWND owner) {
     GetMonitorInfoW(mon, &mi);
     int w = rc.right - rc.left, hgt = rc.bottom - rc.top;
     int x = mi.rcWork.left + (mi.rcWork.right - mi.rcWork.left - w) / 2, y = mi.rcWork.top + (mi.rcWork.bottom - mi.rcWork.top - hgt) / 2;
-    HWND h = CreateWindowExW(0, kClass, L"Wireless Battery: request support for a device", style, x, y, w, hgt, nullptr, nullptr, inst,
+    HWND h = CreateWindowExW(UiRtl() ? WS_EX_LAYOUTRTL : 0, kClass, T(L"Wireless Battery: request support for a device"), style, x, y, w, hgt, nullptr, nullptr, inst,
                              nullptr);
     g_quitOnClose = owner == nullptr;
     if (!h) return;

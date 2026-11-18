@@ -110,4 +110,7 @@ void PollMoondrop(PollContext& ctx);   // MOONDROP GM01 Pro headset (WalkPlay 2.
 void PollHeadsetControl(PollContext& ctx);  // only if headsetcontrol.exe is installed
 void PollGenericHid(PollContext& ctx);
 void PollBluetooth(PollContext& ctx);
+// AirPods / Beats battery from Apple BLE advertisements (apple.cpp), used by PollBluetooth.
+bool IsAppleAudioName(const std::wstring& name);
+bool AppleBudsStatus(DeviceStatus& s);
 void PollXInput(PollContext& ctx);

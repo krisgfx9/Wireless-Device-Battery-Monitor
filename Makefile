@@ -53,5 +53,7 @@ test:
 	./build/galaxy_buds_protocol_test.exe
 	$(CXX) -std=c++17 -O2 -Wall tests/logitech_g435_0adf_test.cpp -o build/logitech_g435_0adf_test.exe
 	./build/logitech_g435_0adf_test.exe
+	$(CXX) -std=c++17 -O2 -Wall tests/apple_protocol_test.cpp -o build/apple_protocol_test.exe
+	./build/apple_protocol_test.exe
 
 .PHONY: clean test
