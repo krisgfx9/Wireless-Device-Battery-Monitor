@@ -30,6 +30,10 @@ clean:
 
 test:
 	@mkdir -p build
+	$(CXX) -std=c++17 -O2 -Wall tests/taskbar_layout_test.cpp -o build/taskbar_layout_test.exe
+	./build/taskbar_layout_test.exe
+	$(CXX) $(CXXFLAGS) tests/widget_layout_test.cpp src/brands.cpp src/i18n.cpp -o build/widget_layout_test.exe $(LIBS)
+	./build/widget_layout_test.exe
 	$(CXX) $(CXXFLAGS) tests/astro_driver_test.cpp src/drivers/astro.cpp -o build/astro_driver_test.exe
 	./build/astro_driver_test.exe
 	$(CXX) $(CXXFLAGS) tests/steelseries_mouse_test.cpp src/drivers/steelseries.cpp -o build/steelseries_mouse_test.exe

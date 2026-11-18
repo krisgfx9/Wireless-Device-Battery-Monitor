@@ -38,7 +38,7 @@ struct MonitorOption {
     std::wstring id;     // lasting monitor identity, stored in the settings
     std::wstring label;  // "Display 3 (right)"
 };
-// The monitors other than the main one that have a horizontal taskbar (empty with one monitor).
+// The monitors other than the main one that have a taskbar (empty with one monitor).
 std::vector<MonitorOption> OtherMonitors();
 // Re-checks the taskbar layout and moves the widget if needed; call about once a second.
 // Returns false when the taskbar it was attached to is gone.
