@@ -4,7 +4,7 @@ WINDRES  ?= windres
 CXXFLAGS ?= -std=c++17 -Os -Wall -Wno-missing-field-initializers -ffunction-sections -fdata-sections \
             -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00
 LDFLAGS  ?= -municode -mwindows -static -s -Wl,--gc-sections
-LIBS     := -lhid -lsetupapi -lcfgmgr32 -lole32 -loleaut32 -lcomctl32 -lgdi32 -lruntimeobject -lws2_32 -lwinhttp
+LIBS     := -lhid -lsetupapi -lcfgmgr32 -lole32 -loleaut32 -lcomctl32 -lgdi32 -lruntimeobject -lws2_32 -ld3d11 -ldxgi -ld2d1 -ldcomp -ldwmapi -lwinhttp
 
 SRC := $(wildcard src/*.cpp) $(wildcard src/drivers/*.cpp)
 OBJ := $(patsubst src/%.cpp,build/%.o,$(SRC)) build/app_res.o
@@ -15,6 +15,8 @@ WirelessBattery.exe: $(OBJ)
 build/%.o: src/%.cpp $(wildcard src/*.h src/drivers/*.h)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -municode -c $< -o $@
+
+build/widget.o: native/composition_surface.h native/finder_order_guard.h
 
 # Every lang/*.txt is a built-in UI language: joined into one resource, each after an "@file <name>" line.
 build/languages.txt: $(wildcard lang/*.txt)
@@ -28,8 +30,14 @@ build/app_res.o: res/app.rc res/app.manifest res/app.ico res/app_light.ico build
 clean:
 	rm -rf build WirelessBattery.exe
 
-test:
+test: build/app_res.o
+	$(CXX) $(CXXFLAGS) -static tests/composition_hit_test.cpp build/app_res.o -o build/composition_hit_test.exe $(LIBS)
+	./build/composition_hit_test.exe
 	@mkdir -p build
+	$(CXX) -std=c++17 -O2 -Wall tests/myfinder_layout_test.cpp -o build/myfinder_layout_test.exe
+	./build/myfinder_layout_test.exe
+	$(CXX) $(CXXFLAGS) -DUNICODE -D_UNICODE -static tests/myfinder_visibility_test.cpp build/app_res.o -o build/myfinder_visibility_test.exe $(LIBS)
+	./build/myfinder_visibility_test.exe
 	$(CXX) $(CXXFLAGS) tests/astro_driver_test.cpp src/drivers/astro.cpp -o build/astro_driver_test.exe
 	./build/astro_driver_test.exe
 	$(CXX) $(CXXFLAGS) tests/steelseries_mouse_test.cpp src/drivers/steelseries.cpp -o build/steelseries_mouse_test.exe

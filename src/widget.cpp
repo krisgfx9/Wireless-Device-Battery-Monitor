@@ -1,4 +1,7 @@
 #include "widget.h"
+#include "myfinder_layout.h"
+#include "../native/composition_surface.h"
+#include "../native/finder_order_guard.h"
 
 #include "i18n.h"
 
@@ -12,6 +15,7 @@ namespace {
 HWND g_wnd, g_taskbar, g_tip, g_notify, g_rebar;
 UINT g_clickMsg;
 bool g_light, g_hover;
+bool g_myFinder = false;
 bool g_background;  // opaque rounded plate behind the text, for transparent / restyled taskbars
 bool g_stacked;     // icon above the percentage (menu option, PR #525)
 bool g_vertical;    // the primary taskbar is docked left or right: one block per device, stacked (PR #321)
@@ -20,6 +24,10 @@ std::wstring g_tipText;
 RECT g_lastTray{}, g_lastBar{}, g_lastWidgets{};
 int g_lastW = -1, g_lastDpi = 0, g_lastLeft = -1;
 SIZE g_size{};
+CompositionSurface g_composition;
+FinderOrderGuard g_orderGuard;
+bool g_compositionReady=false;
+ULONGLONG g_lastValidFinderPlacement = 0;
 HINSTANCE g_inst;
 
 // Copies of the strip on secondary-monitor taskbars (Shell_SecondaryTrayWnd), so the levels stay visible
@@ -42,7 +50,129 @@ HWND g_dpiBar;  // while a mirror is painted or placed, Px() uses its taskbar's 
 
 const wchar_t* kClass = L"WirelessBatteryWidget";
 
+// Ask MyFinder to render its own bar, excluding our separate popup. No desktop pixels, files or
+// network are involved. Keep the potentially blocking PrintWindow call off our UI thread.
+SRWLOCK g_finderLock = SRWLOCK_INIT;
+HWND g_finderHost = nullptr, g_finderResultHost = nullptr;
+RECT g_finderRect{};
+int g_finderEdge = -1;
+myfinder::Foreground g_finderForeground = myfinder::Foreground::Unknown;
+ULONGLONG g_finderUpdated = 0;
+HANDLE g_finderWake = nullptr;
+bool FinderAboveStrip() {
+    for (HWND window = GetWindow(g_wnd, GW_HWNDPREV); window; window = GetWindow(window, GW_HWNDPREV))
+        if (window == g_taskbar) return true;
+    return false;
+}
+
+HWINEVENTHOOK g_finderOrderHook = nullptr, g_finderForegroundHook = nullptr;
+bool g_finderOrderQueued = false;
+
+void CALLBACK FinderOrderEvent(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, DWORD, DWORD) {
+    if (!g_myFinder || !g_wnd || !g_taskbar || g_finderOrderQueued || !FinderAboveStrip()) return;
+    g_finderOrderQueued = true;
+    HWND above = GetWindow(g_taskbar, GW_HWNDPREV);
+    const bool top = (GetWindowLongPtrW(g_taskbar, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+    if (!above || ((GetWindowLongPtrW(above, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0) != top)
+        above = top ? HWND_TOPMOST : HWND_TOP;
+    SetWindowPos(g_wnd, above, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING);
+    g_finderOrderQueued = false;
+}
+
+DWORD WINAPI FinderLayoutThread(LPVOID) {
+    DWORD interval = 350;
+    ULONGLONG activeUntil = 0;
+    for (;;) {
+        WaitForSingleObject(g_finderWake, interval);
+        interval = 350;
+        AcquireSRWLockShared(&g_finderLock);
+        HWND host = g_finderHost;
+        ReleaseSRWLockShared(&g_finderLock);
+        if (!host || !IsWindow(host) || !IsWindowVisible(host)) continue;
+        RECT rect{};
+        if (!GetWindowRect(host, &rect)) continue;
+        POINT cursor{};
+        const auto now = GetTickCount64();
+        if (GetCursorPos(&cursor) && PtInRect(&rect, cursor)) activeUntil = now + 1000;
+        if (now < activeUntil) interval = 100;
+        int w = rect.right - rect.left, h = rect.bottom - rect.top;
+        if (w < 8 || w > 16384 || h < 4 || h > 256) continue;
+        int edge = -1;
+        auto foreground = myfinder::Foreground::Unknown;
+        HDC screen = GetDC(nullptr), mem = CreateCompatibleDC(screen);
+        BITMAPINFO info{};
+        info.bmiHeader = { sizeof(BITMAPINFOHEADER), w, -h, 1, 32, BI_RGB };
+        void* bits = nullptr;
+        HBITMAP bitmap = mem ? CreateDIBSection(mem, &info, DIB_RGB_COLORS, &bits, nullptr, 0) : nullptr;
+        if (bitmap && bits) {
+            HGDIOBJ old = SelectObject(mem, bitmap);
+            memset(bits, 0, (size_t)w * h * 4);
+            if (PrintWindow(host, mem, 2 /* PW_RENDERFULLCONTENT */)) {
+                GdiFlush();
+                edge = myfinder::GroupLeft(static_cast<const std::uint32_t*>(bits), w, h, std::max(24, h * 2));
+                foreground = myfinder::GlyphForeground(static_cast<const std::uint32_t*>(bits), w, h, edge);
+            }
+            SelectObject(mem, old);
+        }
+        if (bitmap) DeleteObject(bitmap);
+        if (mem) DeleteDC(mem);
+        if (screen) ReleaseDC(nullptr, screen);
+        AcquireSRWLockExclusive(&g_finderLock);
+        // A menu/transition can temporarily produce an empty or failed rendering.
+        // Keep the last good layout until its existing 3.5-second freshness limit;
+        // a failed sample must neither erase it immediately nor refresh its age.
+        if (g_finderHost == host && edge >= 0) {
+            g_finderResultHost = host;
+            g_finderRect = rect;
+            g_finderEdge = edge;
+            if (foreground != myfinder::Foreground::Unknown) g_finderForeground = foreground;
+            g_finderUpdated = GetTickCount64();
+        }
+        ReleaseSRWLockExclusive(&g_finderLock);
+    }
+}
+
+void WatchFinder(HWND host) {
+    AcquireSRWLockExclusive(&g_finderLock);
+    bool changed = host != g_finderHost;
+    g_finderHost = host;
+    if (changed) {
+        g_finderResultHost = nullptr;
+        g_finderEdge = -1;
+        g_finderForeground = myfinder::Foreground::Unknown;
+        g_finderUpdated = 0;
+    }
+    ReleaseSRWLockExclusive(&g_finderLock);
+    if (host && !g_finderWake) {
+        g_finderWake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        HANDLE thread = g_finderWake ? CreateThread(nullptr, 0, FinderLayoutThread, nullptr, 0, nullptr) : nullptr;
+        if (thread) CloseHandle(thread);
+    }
+    if (changed && g_finderWake) SetEvent(g_finderWake);
+}
+
+int FinderEdge(HWND host, const RECT& rect) {
+    AcquireSRWLockShared(&g_finderLock);
+    int edge = g_finderResultHost == host && EqualRect(&rect, &g_finderRect) &&
+               (GetTickCount64() - g_finderUpdated < 3500 || IsWindowVisible(g_wnd)) ? g_finderEdge : -1;
+    ReleaseSRWLockShared(&g_finderLock);
+    return edge;
+}
+
+
+
+myfinder::Foreground FinderForeground(HWND host) {
+    AcquireSRWLockShared(&g_finderLock);
+    auto value = g_finderResultHost == host ? g_finderForeground : myfinder::Foreground::Unknown;
+    ReleaseSRWLockShared(&g_finderLock);
+    return value;
+}
+
 int Dpi() {
+    RECT finderRect{};
+    if (g_myFinder && g_taskbar && GetClientRect(g_taskbar, &finderRect) && finderRect.bottom > 0)
+        return MulDiv(std::clamp((int)finderRect.bottom, 8, 128), 96, 24);
     HWND bar = g_dpiBar ? g_dpiBar : g_taskbar;
     UINT d = bar ? GetDpiForWindow(bar) : 0;
     return d ? (int)d : 96;
@@ -498,9 +628,9 @@ void PaintStrip(HWND wnd, HWND taskbar, bool hover, SIZE& size) {
     if (W <= 0 || H <= 0) return;
     Canvas cv(W, H);
 
-    // Nearly transparent background so the whole strip receives mouse input,
-    // plus a rounded hover highlight like the system tray icons have.
-    for (auto& p : cv.px) p = 0x01000000;
+    // Native taskbar padding receives mouse input. MyFinder needs alpha=0:
+    // even nearly transparent padding/hover fills cause blur flashes there.
+    for (auto& p : cv.px) p = g_myFinder ? 0 : 0x01000000;
     auto roundRect = [&](int inset, int r, Rgb c, int a) {
         for (int y = inset; y < H - inset; y++)
             for (int x = 0; x < W; x++) {
@@ -512,8 +642,8 @@ void PaintStrip(HWND wnd, HWND taskbar, bool hover, SIZE& size) {
     // Optional plate in the taskbar's own colours: keeps the text readable when a taskbar theme
     // (e.g. Windhawk's Taskbar Styler) makes the bar transparent over the wallpaper.
     Rgb barColor = g_light ? Rgb{ 243, 243, 243 } : Rgb{ 32, 32, 32 };
-    if (g_background) roundRect(Px(4), Px(6), barColor, 240);
-    if (hover) roundRect(Px(4), Px(4), g_light ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 }, g_light ? 20 : 26);
+    if (g_background && !g_myFinder) roundRect(Px(4), Px(6), barColor, 240);
+    if (hover && !g_myFinder) roundRect(Px(4), Px(4), g_light ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 }, g_light ? 20 : 26);
 
     int x = Px(8);
     Rgb track = g_light ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 };
@@ -547,6 +677,15 @@ void PaintStrip(HWND wnd, HWND taskbar, bool hover, SIZE& size) {
         cv.Draw(p.m, xs[i], ys[i], p.color, p.alpha);
     }
 
+    if(g_myFinder && g_compositionReady) {
+        size = {W, H};
+        if(!g_composition.Paint(cv.px.data(),W,H,W*4)) {
+            g_compositionReady=g_composition.Initialize(g_wnd) && g_composition.Paint(cv.px.data(),W,H,W*4);
+            if(!g_compositionReady)ShowWindow(g_wnd,SW_HIDE);
+        }
+        g_lastW=-1;
+        return;
+    }
     HDC screen = GetDC(nullptr);
     HDC mem = CreateCompatibleDC(screen);
     BITMAPINFO bi{};
@@ -712,6 +851,7 @@ void SetPrimaryHidden(bool hide) {
 }
 
 void SyncMirrors() {
+    if (g_myFinder) return;
     std::vector<HWND> all = g_wnd ? SecondaryTaskbars() : std::vector<HWND>{}, bars;
     bool chosenFound = false;
     if (g_choice == L"all") {
@@ -772,21 +912,39 @@ void SetHover(HWND h, bool on) {
 
 LRESULT CALLBACK WidgetProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+        case WM_SHOWWINDOW:
+            if(g_myFinder && lp!=0)return 0;
+            break;
         case WM_MOUSEMOVE: {
             TRACKMOUSEEVENT t{ sizeof(t), TME_LEAVE, h, 0 };
             TrackMouseEvent(&t);
-            SetHover(h, true);
+            if (!g_myFinder) SetHover(h, true);
             return 0;
         }
         case WM_MOUSELEAVE:
-            SetHover(h, false);
+            if (!g_myFinder) SetHover(h, false);
             return 0;
         case WM_LBUTTONUP:
         case WM_RBUTTONUP:
             PostMessageW(g_notify, g_clickMsg, 0, 0);
             return 0;
+        case WM_NCHITTEST:
+            if(g_myFinder)return HTCLIENT;
+            break;
+        case WM_NCLBUTTONDBLCLK:
+            if(g_myFinder)return 0;
+            break;
+        case WM_SYSCOMMAND:
+            if(g_myFinder) {
+                auto command=wp&0xfff0;
+                if(command==SC_MAXIMIZE||command==SC_MINIMIZE||command==SC_RESTORE||command==SC_MOVE||command==SC_SIZE)return 0;
+            }
+            break;
         case WM_MOUSEACTIVATE:
             return MA_NOACTIVATE;
+        case WM_ERASEBKGND:
+            if (g_myFinder && g_compositionReady) return 1;
+            break;
     }
     return DefWindowProcW(h, msg, wp, lp);
 }
@@ -795,16 +953,24 @@ LRESULT CALLBACK WidgetProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 
 namespace widget {
 
+void SetMyFinder(bool on) {
+    if (g_myFinder == on) return;
+    Destroy();
+    g_myFinder = on;
+}
+
 bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme) {
     Destroy();
-    g_taskbar = FindWindowW(L"Shell_TrayWnd", nullptr);
-    if (!g_taskbar || !FindWindowExW(g_taskbar, nullptr, L"TrayNotifyWnd", nullptr)) { g_taskbar = nullptr; return false; }
+    g_taskbar = FindWindowW(g_myFinder ? L"MyFinderApp" : L"Shell_TrayWnd", nullptr);
+    if (!g_taskbar || (!g_myFinder && !FindWindowExW(g_taskbar, nullptr, L"TrayNotifyWnd", nullptr))) {
+        g_taskbar = nullptr; return false;
+    }
     RECT tb;
     GetWindowRect(g_taskbar, &tb);
     g_vertical = tb.bottom - tb.top > tb.right - tb.left;  // left / right taskbar: devices stacked in a column
     // Windows 11's taskbar is a XAML island; on Windows 10 the task buttons live in ReBarWindow32
     // and have to be narrowed so they never slide under the widget.
-    g_rebar = FindWindowExW(g_taskbar, nullptr, L"Windows.UI.Composition.DesktopWindowContentBridge", nullptr)
+    g_rebar = g_myFinder || FindWindowExW(g_taskbar, nullptr, L"Windows.UI.Composition.DesktopWindowContentBridge", nullptr)
                   ? nullptr
                   : FindWindowExW(g_taskbar, nullptr, L"ReBarWindow32", nullptr);
     g_notify = notifyWnd;
@@ -821,10 +987,21 @@ bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme) {
         wc.lpszClassName = kClass;
         registered = RegisterClassExW(&wc) != 0;
     }
-    g_wnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_NOACTIVATE, kClass, L"", WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 1, 1,
-                            g_taskbar, nullptr, inst, nullptr);
+    DWORD exStyle = WS_EX_NOACTIVATE | (g_myFinder ? WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP : WS_EX_LAYERED);
+    DWORD style = g_myFinder ? WS_POPUP : WS_CHILD | WS_CLIPSIBLINGS;
+    g_wnd = CreateWindowExW(exStyle, kClass, L"Wireless Battery", style, 0, 0, 1, 1,
+                            g_myFinder ? nullptr : g_taskbar, nullptr, inst, nullptr);
     if (!g_wnd) { g_taskbar = nullptr; return false; }
-
+    if (g_myFinder) {
+        g_compositionReady=g_composition.Initialize(g_wnd);
+        if(!g_compositionReady){Destroy();return false;}
+    }
+    if (g_myFinder) {
+        g_finderOrderHook = SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_LOCATIONCHANGE, nullptr,
+                                          FinderOrderEvent, 0, 0, WINEVENT_OUTOFCONTEXT);
+        g_finderForegroundHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr,
+                                               FinderOrderEvent, 0, 0, WINEVENT_OUTOFCONTEXT);
+    }
     INITCOMMONCONTROLSEX icc{ sizeof(icc), ICC_WIN95_CLASSES };
     InitCommonControlsEx(&icc);
     g_tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, 0, 0, 0, 0,
@@ -839,16 +1016,27 @@ bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme) {
         SendMessageW(g_tip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
         SendMessageW(g_tip, TTM_SETMAXTIPWIDTH, 0, 600);
     }
-    WatchWidgetsButton(g_taskbar);
+    if (!g_myFinder || g_wbWake) WatchWidgetsButton(g_myFinder ? nullptr : g_taskbar);
+    if(g_myFinder)g_orderGuard.Start(g_wnd,g_taskbar);
     g_lastDpi = Dpi();
     Paint();
     g_lastW = -1;
+    if (g_myFinder) {
+        WatchFinder(g_taskbar);
+        return Reposition();
+    }
     Reposition();
     if (!g_primaryHidden) ShowWindow(g_wnd, SW_SHOWNOACTIVATE);  // hidden when only another monitor is chosen
     return true;
 }
 
 void Destroy() {
+    g_lastValidFinderPlacement = 0;
+    g_orderGuard.Stop();
+    if (g_finderOrderHook) UnhookWinEvent(g_finderOrderHook);
+    if (g_finderForegroundHook) UnhookWinEvent(g_finderForegroundHook);
+    g_finderOrderHook = g_finderForegroundHook = nullptr;
+    g_finderOrderQueued = false;
     if (g_rebar && IsWindow(g_rebar) && g_taskbar && IsWindow(g_taskbar)) {
         // Let Explorer lay the task buttons out again over the full width.
         RECT r;
@@ -856,18 +1044,20 @@ void Destroy() {
         PostMessageW(g_taskbar, WM_SIZE, SIZE_RESTORED, MAKELPARAM(r.right, r.bottom));
     }
     g_rebar = nullptr;
+    WatchFinder(nullptr);
     for (auto& m : g_mirrors) DestroyMirror(m);
     g_mirrors.clear();
     SetMeasureMirrors(false);
     g_primaryHidden = false;  // the next Create() decides again
     if (g_wbWake) WatchWidgetsButton(nullptr);
     if (g_tip) { DestroyWindow(g_tip); g_tip = nullptr; }
+    g_composition.Reset();g_compositionReady=false;
     if (g_wnd) { DestroyWindow(g_wnd); g_wnd = nullptr; }
     g_taskbar = nullptr;
     g_hover = false;
 }
 
-bool Alive() { return g_wnd && IsWindow(g_wnd) && g_taskbar && IsWindow(g_taskbar); }
+bool Alive() { return g_wnd && IsWindow(g_wnd) && g_taskbar && IsWindow(g_taskbar) && (!g_myFinder || g_compositionReady); }
 
 void SetItems(const std::vector<WidgetItem>& items, const std::wstring& tooltip) {
     g_items = items;
@@ -888,6 +1078,10 @@ void SetItems(const std::vector<WidgetItem>& items, const std::wstring& tooltip)
 }
 
 void SetLightTheme(bool light) {
+    if (g_myFinder) {
+        auto foreground = FinderForeground(g_taskbar);
+        if (foreground != myfinder::Foreground::Unknown) light = foreground == myfinder::Foreground::Dark;
+    }
     g_light = light;
     ApplyTipTheme();
     PaintAll();
@@ -922,6 +1116,57 @@ bool Reposition() {
     SyncMirrors();
     if (g_primaryHidden) return true;  // only another monitor's taskbar shows the strip
     if (Dpi() != g_lastDpi) { g_lastDpi = Dpi(); Paint(); }
+    if (g_myFinder) {
+        auto foreground = FinderForeground(g_taskbar);
+        if (foreground != myfinder::Foreground::Unknown && g_light != (foreground == myfinder::Foreground::Dark)) {
+            g_light = foreground == myfinder::Foreground::Dark;
+            ApplyTipTheme();
+            Paint();
+        }
+        RECT bar{};
+        const auto now = GetTickCount64();
+        const bool keepPlacement = IsWindowVisible(g_wnd) && g_lastValidFinderPlacement &&
+                                   now - g_lastValidFinderPlacement < 400;
+        if (!GetClientRect(g_taskbar, &bar) || !IsWindowVisible(g_taskbar) ||
+            IsIconic(g_taskbar) || bar.right <= 0 || bar.bottom <= 0) {
+            if (!keepPlacement && IsWindowVisible(g_wnd)) ShowWindow(g_wnd, SW_HIDE);
+            return true;
+        }
+        if (bar.bottom != g_size.cy) Paint();
+        RECT screenBar;
+        GetWindowRect(g_taskbar, &screenBar);
+        int edge = FinderEdge(g_taskbar, screenBar);
+        int left = edge - g_size.cx - Px(8);
+        if (edge < 0 || left < 0) {
+            if (keepPlacement) return true;
+            ShowWindow(g_wnd, SW_HIDE);
+            return false;
+        }
+        g_lastValidFinderPlacement = now;
+        POINT origin{ left, 0 };
+        ClientToScreen(g_taskbar, &origin);
+        const bool hostTopmost = (GetWindowLongPtrW(g_taskbar, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+        const bool stripTopmost = (GetWindowLongPtrW(g_wnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+        if (hostTopmost != stripTopmost)
+            SetWindowPos(g_wnd, hostTopmost ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        HWND above = GetWindow(g_taskbar, GW_HWNDPREV);
+        UINT flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER;
+        if (!IsWindowVisible(g_wnd)) flags |= SWP_SHOWWINDOW;
+        if (!FinderAboveStrip()) flags |= SWP_NOZORDER;
+        else if (!above || ((GetWindowLongPtrW(above, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0) != hostTopmost)
+            above = hostTopmost ? HWND_TOPMOST : HWND_TOP;
+        RECT current{};
+        GetWindowRect(g_wnd, &current);
+        if (current.left == origin.x && current.top == origin.y) flags |= SWP_NOMOVE;
+        if (current.right-current.left == g_size.cx && current.bottom-current.top == g_size.cy)
+            flags |= SWP_NOSIZE;
+        // An unchanged visible field needs no window-manager transaction.
+        if ((flags & (SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER)) !=
+            (SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER) || (flags & SWP_SHOWWINDOW))
+            SetWindowPos(g_wnd, above, origin.x, origin.y, g_size.cx, g_size.cy, flags);
+        return true;
+    }
     HWND tray = FindWindowExW(g_taskbar, nullptr, L"TrayNotifyWnd", nullptr);
     if (!tray) return true;
     RECT tr, bar;
