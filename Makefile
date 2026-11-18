@@ -65,5 +65,11 @@ test:
 	./build/labels_test.exe
 	$(CXX) $(CXXFLAGS) tests/brands_test.cpp src/brands.cpp -o build/brands_test.exe
 	./build/brands_test.exe
+	$(CXX) -std=c++17 -O2 -Wall tests/refresh_plan_test.cpp -o build/refresh_plan_test.exe
+	./build/refresh_plan_test.exe
+	$(CXX) $(CXXFLAGS) tests/refresh_scheduler_test.cpp src/refresh_scheduler.cpp -o build/refresh_scheduler_test.exe
+	./build/refresh_scheduler_test.exe
+	$(CXX) $(CXXFLAGS) tests/hid_events_test.cpp src/drivers/event_decoders.cpp src/drivers/logitech_events.cpp -o build/hid_events_test.exe
+	./build/hid_events_test.exe
 
 .PHONY: clean test

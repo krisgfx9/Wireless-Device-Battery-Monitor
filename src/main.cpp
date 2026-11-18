@@ -8,13 +8,19 @@
 #include <algorithm>
 #include <climits>
 #include <cstdio>
+#include <functional>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "devices.h"
 #include "labels.h"
+#include "drivers/hidpp_events.h"
+#include "hid.h"
+#include "hid_listener.h"
+#include "refresh_scheduler.h"
 #include "report.h"
 #include "widget.h"
 
@@ -23,7 +29,6 @@ namespace {
 constexpr UINT WM_TRAY = WM_APP + 1;
 constexpr UINT WM_RESULTS = WM_APP + 2;
 constexpr UINT WM_WIDGET_CLICK = WM_APP + 3;
-constexpr UINT_PTR TIMER_DEBOUNCE = 1;
 constexpr UINT_PTR TIMER_WIDGET = 2;
 constexpr DWORD POLL_INTERVAL_MS = 60 * 1000;
 constexpr int LOW_BATTERY = 15;
@@ -45,7 +50,10 @@ const wchar_t* kSettingsKey = L"Software\\WirelessBattery";
 
 HINSTANCE g_inst;
 HWND g_hwnd;
-HANDLE g_refreshEvt, g_stopEvt, g_worker;
+HANDLE g_stopEvt, g_worker;
+// Emitters (WndProc, the worker, g_sources) ask the scheduler; the worker polls when it says so.
+std::unique_ptr<RefreshScheduler> g_scheduler;
+std::vector<std::unique_ptr<IEventSource>> g_sources;
 UINT g_taskbarCreatedMsg;
 bool g_lightTaskbar;
 bool g_wantWidget = true;      // user's choice: taskbar widget (default) or tray icons
@@ -673,7 +681,7 @@ void ShowMenu() {
     PostMessageW(g_hwnd, WM_NULL, 0, 0);
     DestroyMenu(m);
     switch (cmd) {
-        case ID_REFRESH: SetEvent(g_refreshEvt); break;
+        case ID_REFRESH: g_scheduler->RequestRefresh(RefreshReason::Manual, 0); break;
         case ID_AUTOSTART: SetAutostart(!AutostartEnabled()); break;
         case ID_HIDE_LAST_KNOWN: SetHideLastKnown(!g_hideLastKnown); break;
         case ID_WIDGET_BACKGROUND: SetWidgetBackground(!g_widgetBackground); break;
@@ -740,20 +748,28 @@ std::vector<DeviceStatus> DemoDevices() {
 }
 
 DWORD WINAPI Worker(LPVOID) {
-    // At sign-in a USB receiver may enumerate before its wireless link is ready.
+    // At sign-in a USB receiver may enumerate before its wireless link is ready, so the first few
+    // polls come sooner than the regular interval.
     constexpr DWORD startupPollDelays[] = { 3000, 7000, 15000 };
     size_t startupPoll = 0;
-    HANDLE events[2] = { g_stopEvt, g_refreshEvt };
     for (;;) {
+        if (g_scheduler->WaitForDue(g_stopEvt).Empty()) return 0;  // stopping
         auto* v = new std::vector<DeviceStatus>(g_demo ? DemoDevices() : PollAllDevices());
         if (!PostMessageW(g_hwnd, WM_RESULTS, 0, (LPARAM)v)) delete v;
-        DWORD delay = POLL_INTERVAL_MS;
-        if (startupPoll < ARRAYSIZE(startupPollDelays)) delay = startupPollDelays[startupPoll++];
-        if (WaitForMultipleObjects(2, events, FALSE, delay) == WAIT_OBJECT_0) return 0;
+        // Requests that arrived during the poll are still pending and win if they are sooner.
+        if (startupPoll < ARRAYSIZE(startupPollDelays))
+            g_scheduler->RequestRefresh(RefreshReason::Startup, startupPollDelays[startupPoll++]);
+        else
+            g_scheduler->RequestRefresh(RefreshReason::Timer, POLL_INTERVAL_MS);
     }
 }
 
-void RefreshSoon(UINT ms) { SetTimer(g_hwnd, TIMER_DEBOUNCE, ms, nullptr); }
+// Windows saw the HID device set change: poll after the burst settles, and let the event
+// sources reopen what they hold.
+void DevicesChanged(RefreshReason why, std::uint32_t delayMs) {
+    g_scheduler->RequestRefresh(why, delayMs);
+    for (auto& src : g_sources) src->DevicesChanged();
+}
 
 LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == g_taskbarCreatedMsg && msg != 0) {  // Explorer restarted
@@ -784,13 +800,12 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (wp) DestroyWindow(h);
             return 0;
         case WM_DEVICECHANGE:
-            if (wp == DBT_DEVICEARRIVAL || wp == DBT_DEVICEREMOVECOMPLETE) RefreshSoon(2500);
+            if (wp == DBT_DEVICEARRIVAL || wp == DBT_DEVICEREMOVECOMPLETE) DevicesChanged(RefreshReason::DeviceChange, 2500);
             return TRUE;
         case WM_POWERBROADCAST:
-            if (wp == PBT_APMRESUMEAUTOMATIC) RefreshSoon(5000);
+            if (wp == PBT_APMRESUMEAUTOMATIC) DevicesChanged(RefreshReason::Resume, 5000);  // handles go stale over sleep
             return TRUE;
         case WM_TIMER:
-            if (wp == TIMER_DEBOUNCE) { KillTimer(h, TIMER_DEBOUNCE); SetEvent(g_refreshEvt); }
             if (wp == TIMER_WIDGET) Reconcile();
             return 0;
         case WM_SETTINGCHANGE:
@@ -802,6 +817,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_DESTROY:
             KillTimer(h, TIMER_WIDGET);
             widget::Destroy();
+            for (auto& src : g_sources) src->Stop();
             SetEvent(g_stopEvt);
             if (g_worker) WaitForSingleObject(g_worker, 5000);
             for (auto& [k, e] : g_entries) {
@@ -873,11 +889,74 @@ int ListToConsole(bool dump) {
     return 0;
 }
 
+// `WirelessBattery.exe --events [seconds]` prints the push events the listeners see (default 60 s),
+// so a contributor can check that a device sends them before relying on them.
+int EventsToConsole(const wchar_t* args) {
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (!out || out == INVALID_HANDLE_VALUE) {
+        if (AttachConsole(ATTACH_PARENT_PROCESS)) out = CreateFileW(L"CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    }
+    auto write = [out](const std::wstring& s) {
+        std::wstring line = s + L"\n";
+        int n = WideCharToMultiByte(CP_UTF8, 0, line.c_str(), (int)line.size(), nullptr, 0, nullptr, nullptr);
+        std::string u(n, 0);
+        WideCharToMultiByte(CP_UTF8, 0, line.c_str(), (int)line.size(), u.data(), n, nullptr, nullptr);
+        DWORD w;
+        WriteFile(out, u.data(), (DWORD)u.size(), &w, nullptr);
+    };
+
+    // Logitech receivers send connection events only while their "wireless" notification flag is
+    // set. Read it (a register read, like the battery queries; never written) so the output says
+    // why nothing arrives.
+    for (const HidColl& c : EnumHid()) {
+        if (c.vid != 0x046D || c.page() != 0xFF00 || c.usage() != 0x0001 || c.outLen() != 7) continue;
+        HidDev d;
+        if (!d.Open(c)) continue;
+        BYTE req[7];
+        hidpp::NotificationFlagsRequest(req);
+        d.Flush();
+        std::wstring state = L"no answer (not a receiver?)";
+        if (d.Write(std::vector<BYTE>(req, req + 7))) {
+            std::vector<BYTE> r;
+            for (ULONGLONG end = GetTickCount64() + 500; GetTickCount64() < end;) {
+                std::uint32_t flags = 0;
+                if (d.Read(r, 50) > 0 && hidpp::ParseNotificationFlags(r.data(), r.size(), flags)) {
+                    state = (flags & hidpp::kWirelessNotifications)
+                                ? L"on"
+                                : L"OFF (connection events need G HUB, Options+ or Solaar to switch them on)";
+                    break;
+                }
+            }
+        }
+        write(L"receiver " + Hex4(c.vid) + L":" + Hex4(c.pid) + L" wireless notifications: " + state);
+    }
+
+    // The same listener the app runs, with a sink that prints instead of polling.
+    struct ConsoleSink final : IRefreshSink {
+        std::function<void(const std::wstring&)> write;
+        void RequestRefresh(RefreshReason why, std::uint32_t delayMs) override {
+            std::string name = RefreshReasonName(why);
+            write(L"  => refresh requested (" + std::wstring(name.begin(), name.end()) + L", in " + std::to_wstring(delayMs) + L" ms)");
+        }
+    } sink;
+    sink.write = write;
+    HidEventListener listener(HidEventDecoders(), write);
+    if (!listener.Start(sink)) return 1;
+
+    int seconds = (int)wcstol(wcsstr(args, L"--events") + 8, nullptr, 10);
+    if (seconds <= 0) seconds = 60;
+    write(L"listening for " + std::to_wstring(seconds) + L" s: switch a wireless device off and on...");
+    Sleep((DWORD)seconds * 1000);
+    listener.Stop();
+    return 0;
+}
+
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     if (cmdLine && wcsstr(cmdLine, L"--list")) return ListToConsole(false);
     if (cmdLine && wcsstr(cmdLine, L"--dump")) return ListToConsole(true);
+    if (cmdLine && wcsstr(cmdLine, L"--events")) return EventsToConsole(cmdLine);
     if (cmdLine && wcsstr(cmdLine, L"--report")) {  // the "Request support for a device" window on its own
         report::Show(inst, nullptr);
         MSG msg;
@@ -919,7 +998,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     filter.dbcc_classguid = GUID_DEVINTERFACE_HID;
     HDEVNOTIFY notify = RegisterDeviceNotificationW(g_hwnd, &filter, DEVICE_NOTIFY_WINDOW_HANDLE);
 
-    g_refreshEvt = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    g_scheduler = std::make_unique<RefreshScheduler>();
     g_stopEvt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_wantWidget = LoadWidgetMode();
     g_hideLastKnown = LoadHideLastKnown();
@@ -935,7 +1014,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     Reconcile();
     UpdatePlaceholder();  // something to click on until the first poll finishes
     SetTimer(g_hwnd, TIMER_WIDGET, 1000, nullptr);
+    g_scheduler->RequestRefresh(RefreshReason::Startup, 0);
     g_worker = CreateThread(nullptr, 0, Worker, nullptr, 0, nullptr);
+    g_sources.push_back(std::make_unique<HidEventListener>(HidEventDecoders()));
+    for (auto& src : g_sources) src->Start(*g_scheduler);
 
     MSG m;
     while (GetMessageW(&m, nullptr, 0, 0) > 0) {
