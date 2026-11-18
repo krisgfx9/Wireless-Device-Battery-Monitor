@@ -69,6 +69,7 @@ DeviceKind KindFromCategory(const std::wstring& c) {
 //  * 3151:4013 Attack Shark K86 (Rongyuan firmware) over Bluetooth, from the reporter's --dump in
 //    krisgfx9/Wireless-Device-Battery-Monitor#168. Its USB ids are 3151:4011 / 4015 (OpenRGB issue 4074).
 DeviceKind KindFromBleIds(USHORT vid, USHORT pid) {
+    if (vid == 0x0C45 && pid == 0xFEFE) return DeviceKind::Keyboard; // AJAZZ AK820 Pro over BLE
     if (vid == 0x3151 && pid == 0x4013) return DeviceKind::Keyboard;
     return DeviceKind::Other;
 }

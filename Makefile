@@ -21,7 +21,7 @@ build/languages.txt: $(wildcard lang/*.txt)
 	@mkdir -p build
 	@printf '' > $@; for f in $^; do printf '@file %s\n' "$$(basename $$f .txt)" >> $@; cat "$$f" >> $@; printf '\n' >> $@; done
 
-build/app_res.o: res/app.rc res/app.manifest res/app.ico res/app_light.ico build/languages.txt
+build/app_res.o: res/app.rc res/app.manifest res/app.ico res/app_light.ico res/flag_ru.bmp build/languages.txt
 	@mkdir -p build
 	$(WINDRES) -i $< -o $@ --include-dir res --include-dir build
 
