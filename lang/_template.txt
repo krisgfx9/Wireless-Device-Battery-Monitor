@@ -74,6 +74,7 @@ Collecting the full report (this takes about 10 seconds)... =
 request support for a device = 
 Other monitor = 
 Display {number} = 
+Device icons in system tray =
 
 # Where another monitor sits, next to the main one ("Display 3 (left)")
 left = 

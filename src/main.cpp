@@ -32,7 +32,7 @@ constexpr UINT PLACEHOLDER_ID = 1;
 
 enum MenuId : UINT {
     ID_REFRESH = 100, ID_AUTOSTART, ID_HIDE_LAST_KNOWN, ID_WIDGET_BACKGROUND, ID_EXIT, ID_MODE_WIDGET, ID_MODE_TRAY, ID_SUPPORT, ID_REPORT,
-    ID_BRAND_COLORS, ID_STACKED,
+    ID_BRAND_COLORS, ID_STACKED, ID_TRAY_DEVICE_ICONS,
     ID_LANG_AUTO = 400, ID_LANG_ADD, ID_LANG_FIRST,  // "Language": ID_LANG_FIRST + 0..63
     ID_MONITOR_ALL = 300, ID_MONITOR_MAIN, ID_MONITOR_FIRST,  // "Show the widget on": ID_MONITOR_FIRST + 0..31
     ID_DEVICE_FIRST = 1000
@@ -71,6 +71,7 @@ struct TrayEntry {
 std::map<std::wstring, TrayEntry> g_entries;
 bool g_placeholder = false;
 HICON g_placeholderIcon = nullptr;
+bool g_trayDeviceIcons = false;
 
 // ---- helpers ----------------------------------------------------------------------------------
 
@@ -215,7 +216,7 @@ void SetAutostart(bool on) {
 
 struct Rgb { BYTE r, g, b; };
 
-HICON RenderIcon(const std::wstring& text, int barPct, Rgb textColor, Rgb barColor, bool dim) {
+HICON RenderIcon(const std::wstring& text, int barPct, Rgb textColor, Rgb barColor, bool dim, bool deviceGlyph = false) {
     HWND taskbar = FindWindowW(L"Shell_TrayWnd", nullptr);
     UINT dpi = taskbar ? GetDpiForWindow(taskbar) : 0;
     const int S = GetSystemMetricsForDpi(SM_CXSMICON, dpi ? dpi : GetDpiForSystem());
@@ -240,10 +241,36 @@ HICON RenderIcon(const std::wstring& text, int barPct, Rgb textColor, Rgb barCol
     SetTextColor(dc, RGB(255, 255, 255));
     auto* sp = static_cast<DWORD*>(sbits);
 
+    const wchar_t* fontFace = L"Segoe UI";
+
+    if (deviceGlyph) {
+        // Prefer the same icon font as the taskbar widget.
+        HFONT probe = CreateFontW(
+            -textH, 0, 0, 0, FW_NORMAL, 0, 0, 0,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe Fluent Icons"
+        );
+
+        HGDIOBJ previous = SelectObject(dc, probe);
+        wchar_t actual[LF_FACESIZE] = {};
+        GetTextFaceW(dc, LF_FACESIZE, actual);
+        SelectObject(dc, previous);
+        DeleteObject(probe);
+
+        fontFace = _wcsicmp(actual, L"Segoe Fluent Icons") == 0
+            ? L"Segoe Fluent Icons"
+            : L"Segoe MDL2 Assets";
+    }
+
     int bx0 = 0, by0 = 0, bx1 = -1, by1 = -1;
     for (int fh = textH * 2; fh >= 6; fh--) {
-        HFONT f = CreateFontW(-fh, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                              ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        HFONT f = CreateFontW(
+            -fh, 0, 0, 0,
+            deviceGlyph ? FW_NORMAL : FW_BOLD,
+            0, 0, 0,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            ANTIALIASED_QUALITY, DEFAULT_PITCH, fontFace
+        );
         HGDIOBJ oldF = SelectObject(dc, f);
         SetTextCharacterExtra(dc, text.size() >= 3 ? -1 : 0);
         memset(sbits, 0, (size_t)W * H * 4);
@@ -310,17 +337,32 @@ Rgb Foreground() { return g_lightTaskbar ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 }
 
 Accent AccentFor(const DeviceStatus& s) { return g_brandColors ? BrandOf(s) : Accent::None; }
 
-HICON IconFor(int pct, bool charging, bool dim, Accent accent) {
+HICON IconFor(const DeviceStatus& device, int pct, bool dim, Accent accent) {
     Rgb fg = Foreground();
     BrandColor bc = AccentColor(accent, g_lightTaskbar);
-    Rgb bar = charging        ? Rgb{ 0, 170, 255 }
-            : pct <= LOW_BATTERY ? Rgb{ 232, 32, 48 }
-            : pct <= 30       ? Rgb{ 255, 150, 0 }
+
+    bool charging = device.charging;
+
+    Rgb bar = charging              ? Rgb{ 0, 170, 255 }
+            : pct <= LOW_BATTERY    ? Rgb{ 232, 32, 48 }
+            : pct <= 30             ? Rgb{ 255, 150, 0 }
             : accent != Accent::None ? Rgb{ bc.r, bc.g, bc.b }
-                              : Rgb{ 30, 190, 90 };
-    Rgb text = (!charging && pct >= 0 && pct <= LOW_BATTERY) ? Rgb{ 240, 50, 60 } : fg;
-    std::wstring t = pct < 0 ? L"?" : std::to_wstring(pct);
-    return RenderIcon(t, pct, text, bar, dim);
+                                    : Rgb{ 30, 190, 90 };
+
+    Rgb textColor = (!charging && pct >= 0 && pct <= LOW_BATTERY)
+        ? Rgb{ 240, 50, 60 }
+        : fg;
+
+    if (g_trayDeviceIcons) {
+        const bool bluetooth = device.via == L"Bluetooth";
+        std::wstring glyph(1, widget::DeviceGlyph(device.kind, bluetooth));
+
+        // Keep the clean system-style device glyph; the bar carries battery status.
+        return RenderIcon(glyph, pct, fg, bar, dim, true);
+    }
+
+    std::wstring text = pct < 0 ? L"?" : std::to_wstring(pct);
+    return RenderIcon(text, pct, textColor, bar, dim);
 }
 
 // ---- tray management --------------------------------------------------------------------------
@@ -402,10 +444,16 @@ void ApplyEntry(TrayEntry& e) {
     Accent accent = AccentFor(s);
     std::wstring sig = std::to_wstring(shown) + (s.charging ? L"c" : L"") + (dim ? L"d" : L"") + (g_lightTaskbar ? L"l" : L"k") +
                        L"a" + std::to_wstring((int)accent);
+
+    sig += L"|style=" + std::to_wstring(g_trayDeviceIcons ? 1 : 0);
+    sig += L"|kind=" + std::to_wstring(static_cast<int>(s.kind));
+    sig += s.via == L"Bluetooth" ? L"|bt" : L"|other";
+
     if (sig != e.iconSig || !e.icon) {
         if (e.icon) DestroyIcon(e.icon);
-        e.icon = IconFor(shown, s.charging, dim, accent);
+        e.icon = IconFor(s, shown, dim, accent);
         e.iconSig = sig;
+
     }
     std::wstring tip = s.name + L"\n" + StatusText(e);
 
@@ -645,6 +693,15 @@ void ShowMenu() {
     AppendMenuW(m, MF_STRING | (g_wantWidget ? MF_CHECKED : 0), ID_MODE_WIDGET, T(L"Show on the taskbar (icon + percentage)"));
     AppendMenuW(m, MF_STRING | (!g_wantWidget ? MF_CHECKED : 0), ID_MODE_TRAY, T(L"Show as tray icons"));
     CheckMenuRadioItem(m, ID_MODE_WIDGET, ID_MODE_TRAY, g_wantWidget ? ID_MODE_WIDGET : ID_MODE_TRAY, MF_BYCOMMAND);
+    AppendMenuW(
+        m,
+        MF_STRING |
+            (g_trayDeviceIcons ? MF_CHECKED : 0) |
+            (g_wantWidget ? MF_GRAYED : 0),
+        ID_TRAY_DEVICE_ICONS,
+        T(L"Device icons in system tray")
+    );
+
     UINT bgFlags = MF_STRING | (g_widgetBackground ? MF_CHECKED : 0) | (g_wantWidget ? 0 : MF_GRAYED);
     AppendMenuW(m, bgFlags, ID_WIDGET_BACKGROUND, T(L"Background behind taskbar text (for transparent taskbars)"));
     AppendMenuW(m, MF_STRING | (g_stacked ? MF_CHECKED : 0) | (g_wantWidget ? 0 : MF_GRAYED), ID_STACKED, T(L"Icons above percentages (narrower)"));
@@ -703,6 +760,8 @@ void ShowMenu() {
     PostMessageW(g_hwnd, WM_NULL, 0, 0);
     DestroyMenu(m);
     switch (cmd) {
+
+        case ID_TRAY_DEVICE_ICONS: g_trayDeviceIcons = !g_trayDeviceIcons; SaveBoolSetting(L"TrayDeviceIcons", g_trayDeviceIcons); RedrawAll(); break;
         case ID_REFRESH: SetEvent(g_refreshEvt); break;
         case ID_AUTOSTART: SetAutostart(!AutostartEnabled()); break;
         case ID_HIDE_LAST_KNOWN: SetHideLastKnown(!g_hideLastKnown); break;
@@ -957,6 +1016,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     g_refreshEvt = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     g_stopEvt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_wantWidget = LoadWidgetMode();
+    g_trayDeviceIcons = LoadBoolSetting(L"TrayDeviceIcons", false);
     g_hideLastKnown = LoadHideLastKnown();
     g_widgetBackground = LoadWidgetBackground();
     g_brandColors = LoadBrandColors();

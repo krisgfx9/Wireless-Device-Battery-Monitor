@@ -69,6 +69,7 @@ Collecting the full report (this takes about 10 seconds)... = Zbieranie pełnego
 request support for a device = prośba o obsługę urządzenia
 Other monitor = Inny monitor
 Display {number} = Ekran {number}
+Device icons in system tray = Ikony urządzeń w zasobniku systemowym
 left = po lewej
 right = po prawej
 above = powyżej

@@ -21,7 +21,10 @@ struct WidgetItem {
 };
 
 namespace widget {
-// Creates the widget on the primary taskbar. Clicks are reported by posting `clickMsg` to `notifyWnd`.
+// Uses the same device glyph mapping as the taskbar widget.
+wchar_t DeviceGlyph(DeviceKind kind, bool bluetooth);
+
+// Creates the widget on the primary taskbar.
 bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme);
 void Destroy();
 bool Alive();
