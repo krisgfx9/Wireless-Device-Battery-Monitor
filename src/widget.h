@@ -25,6 +25,8 @@ namespace widget {
 bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme);
 void Destroy();
 bool Alive();
+// Experimental opt-in: allow widget with TaskbarX, but do not resize the task-button area.
+void SetTaskbarXExperimental(bool on);
 void SetItems(const std::vector<WidgetItem>& items, const std::wstring& tooltip);
 void SetLightTheme(bool light);
 // Draws a rounded plate in the taskbar's colours behind the text (kept across Create/Destroy).
