@@ -1,9 +1,9 @@
-name: TaskbarX compatibility test build
+name: TaskbarX experimental widget build
 
 on:
   push:
     branches:
-      - compat/taskbarx-safe-mode
+      - compat/taskbarx-experimental-widget
 
 permissions:
   contents: read
@@ -25,5 +25,5 @@ jobs:
         run: make test
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: WirelessBattery-taskbarx-compat
+          name: WirelessBattery-taskbarx-experimental
           path: WirelessBattery.exe
