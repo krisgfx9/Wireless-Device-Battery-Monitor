@@ -78,6 +78,7 @@ std::vector<DeviceStatus> PollAllDevices() {
     PollRawm(ctx);
     PollAkko(ctx);
     PollRongyuan(ctx);
+    PollVgnClient(ctx);  // VGN: after the drivers that already claim VGN ids (320F ATK keyboards, 3554 Kysona/AULA, 3151 Rongyuan)
     PollSonix(ctx);
     PollViaDongle(ctx);
     PollSemico(ctx);
