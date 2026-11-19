@@ -58,6 +58,8 @@ test: test-update-core test-update-win test-update-signature
 	./build/steelseries_mouse_test.exe
 	$(CXX) -std=c++17 -O2 -Wall tests/rapoo_protocol_test.cpp -o build/rapoo_protocol_test.exe
 	./build/rapoo_protocol_test.exe
+	$(CXX) -std=c++17 -O2 -Wall tests/sony_inzone_protocol_test.cpp -o build/sony_inzone_protocol_test.exe
+	./build/sony_inzone_protocol_test.exe
 	$(CXX) $(CXXFLAGS) tests/rapoo_driver_test.cpp src/drivers/rapoo.cpp -o build/rapoo_driver_test.exe
 	./build/rapoo_driver_test.exe
 	$(CXX) -std=c++17 -O2 -Wall tests/rawm_protocol_test.cpp -o build/rawm_protocol_test.exe
