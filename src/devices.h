@@ -13,6 +13,7 @@ struct DeviceStatus {
     int  percent    = -1;      // 0..100, or -1 when unknown right now
     std::wstring detail;       // extra breakdown for the tooltip, e.g. "L 80%, R 75%, case 40%"
     std::wstring levelText;    // set when the device only reports coarse levels ("Low", "Full"...)
+    std::wstring note;         // advice shown while there is no level (an English phrase, translated by the UI)
     bool charging   = false;
     bool full       = false;   // on power and fully charged (charging may also be set)
     bool asleep     = false;   // receiver answered but the device is sleeping (keep last value)

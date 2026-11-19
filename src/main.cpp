@@ -446,6 +446,7 @@ std::wstring StatusText(const TrayEntry& e) {
     if (s.full || (s.charging && s.percent >= 100)) t += std::wstring(L", ") + T(L"fully charged");
     else if (s.charging) t += std::wstring(L", ") + T(L"charging");
     if (s.asleep) t += std::wstring(L", ") + T(L"asleep");
+    if (!s.note.empty() && s.percent < 0) t += std::wstring(L", ") + T(s.note);
     return t;
 }
 
@@ -1167,6 +1168,7 @@ int ListToConsole(bool dump) {
         if (!s.detail.empty()) line += L" (" + s.detail + L")";
         if (s.full || (s.charging && s.percent >= 100)) line += L", fully charged";
         else if (s.charging) line += L", charging";
+        if (!s.note.empty() && s.percent < 0) line += L", " + s.note;
         if (s.millivolts) line += L", " + std::to_wstring(s.millivolts) + L" mV";
         write(line + L"   (" + s.key + L")\n");
     }

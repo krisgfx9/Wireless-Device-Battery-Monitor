@@ -85,7 +85,7 @@ void PollAtkKeyboard(PollContext& ctx);   // ATK V75X / VGN keyboards (Evision 3
 void PollRedragonEvision(PollContext& ctx);  // Redragon M999 on its Evision 2.4 GHz receiver (320F:226F)
 void PollBarracudaPro(PollContext& ctx);  // Razer Barracuda Pro (1532:053A), before the generic Razer driver
 void PollSteelSeriesElite(PollContext& ctx);  // SteelSeries Arctis Nova Elite base station (1038:2244)
-void PollAudeze(PollContext& ctx);        // Audeze Maxwell (VID 3329) dongle or cable
+void PollAudeze(PollContext& ctx);        // Audeze Maxwell (VID 3329): PC / Xbox / Maxwell 2 dongles or cable
 void PollEndorfy(PollContext& ctx);       // ENDORFY Viro Wireless dongle (3738:0072), Airoha RACE battery query
 void PollTurtleBeach(PollContext& ctx);   // Turtle Beach Stealth 700 Gen 3 (10F5:2251 / 2262 transmitters, 2253 cable)
 void PollAkg(PollContext& ctx);           // AKG N9 Hybrid on its USB dongle (0ECB:20D9), Airoha RACE battery query

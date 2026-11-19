@@ -14,6 +14,7 @@ unknown =
 charging = 
 fully charged = 
 asleep = 
+unplug the dongle and plug it back in = 
 No devices with battery info found = 
 Low battery = 
 Battery alerts =
