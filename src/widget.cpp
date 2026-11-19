@@ -604,6 +604,34 @@ void HideMirror(Mirror& m) {
     m.lastLeft = INT_MIN;
 }
 
+// Other programs that embed their own strip in the taskbar (TrafficMonitor, ...) anchor it next to the
+// notification area too, the same spot as ours. Returns the screen x to sit left of, stepped past every
+// visible child window of `bar` that belongs to neither Explorer nor this app and would overlap us.
+int ClearForeignStrips(HWND bar, HWND self, int edge, int width) {
+    DWORD explorer = 0;
+    GetWindowThreadProcessId(bar, &explorer);
+    const DWORD own = GetCurrentProcessId();
+    RECT br{};
+    if (!GetWindowRect(bar, &br)) return edge;
+    for (int pass = 0; pass < 8; pass++) {  // bounded: each step only moves left
+        bool moved = false;
+        for (HWND c = GetWindow(bar, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+            if (c == self || !IsWindowVisible(c)) continue;
+            DWORD pid = 0;
+            GetWindowThreadProcessId(c, &pid);
+            if (pid == explorer || pid == own) continue;
+            RECT r{};
+            if (!GetWindowRect(c, &r) || r.right <= r.left || r.bottom <= br.top || r.top >= br.bottom) continue;
+            if (r.left < edge && r.right > edge - width - Px(2)) {
+                edge = r.left;
+                moved = true;
+            }
+        }
+        if (!moved) break;
+    }
+    return edge;
+}
+
 // Places a mirror left of its taskbar's clock (and left of the Widgets button if present), or hides it
 // when that spot is unknown or taken by task buttons: never guess and cover something.
 void PositionMirror(Mirror& m) {
@@ -645,6 +673,7 @@ void PositionMirror(Mirror& m) {
             }
         ReleaseSRWLockShared(&g_wbLock);
     }
+    if (known) right = ClearForeignStrips(m.bar, m.wnd, right, m.size.cx);
     DWORD offset = 0, sz = sizeof(offset);
     if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\WirelessBattery", L"TaskbarOffset", RRF_RT_REG_DWORD, nullptr, &offset, &sz) ==
         ERROR_SUCCESS)
@@ -1027,6 +1056,7 @@ bool Reposition() {
     if (wb.right > wb.left && wb.top < bar.bottom && wb.bottom > bar.top &&
         (rtl ? wb.left < edge + g_size.cx + Px(2) && wb.right > edge : wb.right > edge - g_size.cx - Px(2) && wb.left < edge))
         edge = rtl ? wb.right : wb.left;
+    if (!rtl) edge = ClearForeignStrips(g_taskbar, g_wnd, edge, g_size.cx);
     POINT p{ edge, bar.top };
     ScreenToClient(g_taskbar, &p);
     int left = p.x - g_size.cx - Px(2);
