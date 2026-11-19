@@ -72,12 +72,13 @@ HANDLE g_wbWake;             // auto-reset: wakes the lookup thread early
 struct Span {
     HWND bar = nullptr;
     bool measured = false;   // UI Automation answered for this taskbar
+    bool rtl = false;        // taskbar has WS_EX_LAYOUTRTL (Arabic, Hebrew)
     bool hasClock = false;   // the clock can be turned off on secondary taskbars
-    int clockLeft = 0;       // screen x
+    int clockEdge = 0;       // screen x of the clock area's inner edge (left in LTR, right in RTL)
     bool hasWidgets = false; // Widgets (weather) button on secondary taskbar
     RECT widgets{};          // bounding rectangle of WidgetsButton (screen coords)
     bool hasTasks = false;
-    int tasksRight = 0;      // right edge of the last task button left of the clock (screen x)
+    int tasksEdge = 0;       // screen x of the task button nearest the clock (right in LTR, left in RTL)
 };
 std::vector<Span> g_spans;   // guarded by g_wbLock
 bool g_wbMirrors;            // guarded by g_wbLock: measure secondary taskbars too
@@ -96,6 +97,7 @@ IUIAutomationCondition* StringCondition(IUIAutomation* uia, PROPERTYID prop, con
 Span MeasureSpan(IUIAutomation* uia, HWND bar) {
     Span s;
     s.bar = bar;
+    s.rtl = (GetWindowLongW(bar, GWL_EXSTYLE) & WS_EX_LAYOUTRTL) != 0;
     RECT br{};
     IUIAutomationElement* root = nullptr;
     if (!GetWindowRect(bar, &br) || FAILED(uia->ElementFromHandle(bar, &root)) || !root) return s;
@@ -105,13 +107,15 @@ Span MeasureSpan(IUIAutomation* uia, HWND bar) {
         IUIAutomationElementArray* all = nullptr;
         int n = 0;
         if (SUCCEEDED(root->FindAll(TreeScope_Descendants, clock, &all)) && all && SUCCEEDED(all->get_Length(&n)))
-            for (int i = 0; i < n; i++) {  // leftmost of the clock area's buttons
+            for (int i = 0; i < n; i++) {  // inner edge of the clock area (leftmost in LTR, rightmost in RTL)
                 IUIAutomationElement* el = nullptr;
                 RECT r{};
-                if (SUCCEEDED(all->GetElement(i, &el)) && el && SUCCEEDED(el->get_CurrentBoundingRectangle(&r)) && inBar(r) &&
-                    (!s.hasClock || r.left < s.clockLeft)) {
-                    s.clockLeft = r.left;
-                    s.hasClock = true;
+                if (SUCCEEDED(all->GetElement(i, &el)) && el && SUCCEEDED(el->get_CurrentBoundingRectangle(&r)) && inBar(r)) {
+                    int edge = s.rtl ? r.right : r.left;
+                    if (!s.hasClock || (s.rtl ? edge > s.clockEdge : edge < s.clockEdge)) {
+                        s.clockEdge = edge;
+                        s.hasClock = true;
+                    }
                 }
                 if (el) el->Release();
             }
@@ -136,11 +140,14 @@ Span MeasureSpan(IUIAutomation* uia, HWND bar) {
             for (int i = 0; i < n; i++) {
                 IUIAutomationElement* el = nullptr;
                 RECT r{};
-                if (SUCCEEDED(all->GetElement(i, &el)) && el && SUCCEEDED(el->get_CurrentBoundingRectangle(&r)) && inBar(r) &&
-                    (!s.hasClock || r.right <= s.clockLeft) && (!s.hasWidgets || r.right <= s.widgets.left) &&
-                    (!s.hasTasks || r.right > s.tasksRight)) {
-                    s.tasksRight = r.right;
-                    s.hasTasks = true;
+                if (SUCCEEDED(all->GetElement(i, &el)) && el && SUCCEEDED(el->get_CurrentBoundingRectangle(&r)) && inBar(r)) {
+                    bool clearOfClock = !s.hasClock || (s.rtl ? r.left >= s.clockEdge : r.right <= s.clockEdge);
+                    bool clearOfWidgets = !s.hasWidgets || (s.rtl ? r.left >= s.widgets.right : r.right <= s.widgets.left);
+                    int edge = s.rtl ? r.left : r.right;
+                    if (clearOfClock && clearOfWidgets && (!s.hasTasks || (s.rtl ? edge < s.tasksEdge : edge > s.tasksEdge))) {
+                        s.tasksEdge = edge;
+                        s.hasTasks = true;
+                    }
                 }
                 if (el) el->Release();
             }
@@ -614,14 +621,15 @@ void HideMirror(Mirror& m) {
     m.lastLeft = INT_MIN;
 }
 
-// Places a mirror left of its taskbar's clock (and left of the Widgets button if present), or hides it
+// Places a mirror next to its taskbar's clock (left of it in LTR, right of it in RTL), or hides it
 // when that spot is unknown or taken by task buttons: never guess and cover something.
 void PositionMirror(Mirror& m) {
     RECT bar{};
-    if (!GetWindowRect(m.bar, &bar) || (GetWindowLongW(m.bar, GWL_EXSTYLE) & WS_EX_LAYOUTRTL)) { HideMirror(m); return; }
+    if (!GetWindowRect(m.bar, &bar)) { HideMirror(m); return; }
+    bool rtl = (GetWindowLongW(m.bar, GWL_EXSTYLE) & WS_EX_LAYOUTRTL) != 0;
     g_dpiBar = m.bar;
     if (Dpi() != m.dpi || m.size.cy != bar.bottom - bar.top) PaintMirror(m), g_dpiBar = m.bar;
-    int right = 0, minLeft = bar.left;
+    int edge = 0, limit = rtl ? bar.right : bar.left;
     bool known = false;
     // StartAllBack can put a full notification area on each secondary taskbar.
     // Use its left edge, as on the primary taskbar, to clear all of the tray icons.
@@ -630,27 +638,34 @@ void PositionMirror(Mirror& m) {
     if (tray && IsWindowVisible(tray) && GetWindowRect(tray, &tr) &&
         tr.left > bar.left && tr.right <= bar.right && tr.right > tr.left &&
         tr.bottom > bar.top && tr.top < bar.bottom) {
-        right = tr.left;
+        edge = rtl ? tr.right : tr.left;
         known = true;
     } else if (!IsXamlTaskbar(m.bar)) {  // Windows 10: the clock is a real child window (absent when it is turned off)
         HWND clock = FindWindowExW(m.bar, nullptr, L"ClockButton", nullptr);
         RECT cr{};
-        right = clock && IsWindowVisible(clock) && GetWindowRect(clock, &cr) ? cr.left : bar.right - Px(8);
+        if (clock && IsWindowVisible(clock) && GetWindowRect(clock, &cr))
+            edge = rtl ? cr.right : cr.left;
+        else
+            edge = rtl ? bar.left + Px(8) : bar.right - Px(8);
         for (const wchar_t* cls : { L"ShellFeedsTaskbarViewWindow", L"DynamicContent2" }) {
             HWND feeds = FindWindowExW(m.bar, nullptr, cls, nullptr);
             RECT fr{};
-            if (feeds && IsWindowVisible(feeds) && GetWindowRect(feeds, &fr) && fr.left < right && fr.right > fr.left)
-                right = fr.left;
+            if (feeds && IsWindowVisible(feeds) && GetWindowRect(feeds, &fr) && fr.right > fr.left) {
+                if (rtl ? fr.right > edge : fr.left < edge) edge = rtl ? fr.right : fr.left;
+            }
         }
         known = true;
     } else {
         AcquireSRWLockShared(&g_wbLock);
         for (const auto& s : g_spans)
-            if (s.bar == m.bar && s.measured) {
-                right = s.hasClock ? s.clockLeft : bar.right - Px(8);
-                if (s.hasWidgets && s.widgets.left < right && s.widgets.right > right - m.size.cx - Px(2))
-                    right = s.widgets.left;
-                if (s.hasTasks) minLeft = s.tasksRight + Px(4);
+            if (s.bar == m.bar && s.measured && s.rtl == rtl) {
+                edge = s.hasClock ? s.clockEdge : (rtl ? bar.left + Px(8) : bar.right - Px(8));
+                if (s.hasWidgets) {
+                    if (rtl ? s.widgets.right > edge && s.widgets.left < edge + m.size.cx + Px(2)
+                            : s.widgets.left < edge && s.widgets.right > edge - m.size.cx - Px(2))
+                        edge = rtl ? s.widgets.right : s.widgets.left;
+                }
+                if (s.hasTasks) limit = rtl ? s.tasksEdge - Px(4) : s.tasksEdge + Px(4);
                 known = true;
             }
         ReleaseSRWLockShared(&g_wbLock);
@@ -658,19 +673,21 @@ void PositionMirror(Mirror& m) {
     DWORD offset = 0, sz = sizeof(offset);
     if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\WirelessBattery", L"TaskbarOffset", RRF_RT_REG_DWORD, nullptr, &offset, &sz) ==
         ERROR_SUCCESS)
-        right -= Px((int)offset);
+        edge += rtl ? Px((int)offset) : -Px((int)offset);
     if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\WirelessBattery", L"SecondaryTaskbarOffset", RRF_RT_REG_DWORD, nullptr, &offset, &sz) ==
         ERROR_SUCCESS)
-        right -= Px((int)offset);
-    int left = right - m.size.cx - Px(2);
+        edge += rtl ? Px((int)offset) : -Px((int)offset);
+    int gap = Px(2);
+    bool fits = rtl ? (edge + m.size.cx + gap <= limit) : (edge - m.size.cx - gap >= limit);
     g_dpiBar = nullptr;
-    if (!known || m.size.cx <= 0 || left < minLeft) { HideMirror(m); return; }
-    POINT p{ left, bar.top };
+    if (!known || m.size.cx <= 0 || !fits) { HideMirror(m); return; }
+    POINT p{ edge, bar.top };
     ScreenToClient(m.bar, &p);
+    int left = p.x - m.size.cx - gap;
     bool covered = GetWindow(m.wnd, GW_HWNDPREV) != nullptr;
-    if (!covered && p.x == m.lastLeft) return;
-    m.lastLeft = p.x;
-    SetWindowPos(m.wnd, HWND_TOP, p.x, 0, m.size.cx, m.size.cy, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    if (!covered && left == m.lastLeft) return;
+    m.lastLeft = left;
+    SetWindowPos(m.wnd, HWND_TOP, left, 0, m.size.cx, m.size.cy, SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
 
 void AddTool(HWND w) {
@@ -786,7 +803,7 @@ void SyncMirrors() {
         if (std::any_of(g_mirrors.begin(), g_mirrors.end(), [b](const Mirror& m) { return m.bar == b; })) continue;
         Mirror m;
         m.bar = b;
-        m.wnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_NOACTIVATE, kClass, L"", WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 1, 1, b, nullptr,
+        m.wnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_NOINHERITLAYOUT, kClass, L"", WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 1, 1, b, nullptr,
                                 g_inst, nullptr);
         if (!m.wnd) continue;
         AddTool(m.wnd);
@@ -870,7 +887,7 @@ bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme) {
         wc.lpszClassName = kClass;
         registered = RegisterClassExW(&wc) != 0;
     }
-    g_wnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_NOACTIVATE, kClass, L"", WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 1, 1,
+    g_wnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_NOINHERITLAYOUT, kClass, L"", WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 1, 1,
                             g_taskbar, nullptr, inst, nullptr);
     if (!g_wnd) { g_taskbar = nullptr; return false; }
 
@@ -1024,14 +1041,14 @@ bool Reposition() {
     // where the search highlights button is DynamicContent1). Both are direct children of the taskbar and
     // only a visible one counts. Its rectangle is read on every pass because the weather text changes its
     // width, so the widget follows it.
-    if (!rtl)
-        for (const wchar_t* cls : { L"ShellFeedsTaskbarViewWindow", L"DynamicContent2" }) {
-            HWND feeds = FindWindowExW(g_taskbar, nullptr, cls, nullptr);
-            if (!feeds || !IsWindowVisible(feeds)) continue;
-            RECT fr;
-            GetWindowRect(feeds, &fr);
-            if (fr.left < edge && fr.right > fr.left) edge = fr.left;
-        }
+    for (const wchar_t* cls : { L"ShellFeedsTaskbarViewWindow", L"DynamicContent2" }) {
+        HWND feeds = FindWindowExW(g_taskbar, nullptr, cls, nullptr);
+        if (!feeds || !IsWindowVisible(feeds)) continue;
+        RECT fr;
+        GetWindowRect(feeds, &fr);
+        if (fr.right <= fr.left) continue;
+        if (rtl ? fr.right > edge : fr.left < edge) edge = rtl ? fr.right : fr.left;
+    }
     // Step past the Widgets button when it sits where we would go.
     RECT wb = WidgetsButtonRect();
     if (wb.right > wb.left && wb.top < bar.bottom && wb.bottom > bar.top &&
@@ -1041,13 +1058,15 @@ bool Reposition() {
     ScreenToClient(g_taskbar, &p);
     int left = p.x - g_size.cx - Px(2);
 
-
     // Optional user override in DPI-independent pixels (e.g. for custom padding).
     DWORD customOffset = 0, sz = sizeof(customOffset);
     if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\WirelessBattery", L"TaskbarOffset",
                      RRF_RT_REG_DWORD, nullptr, &customOffset, &sz) == ERROR_SUCCESS) {
         left -= Px((int)customOffset);
     }
+    RECT client{};
+    if (GetClientRect(g_taskbar, &client) && client.right > g_size.cx)
+        left = std::clamp(left, 0, (int)(client.right - g_size.cx));
 
     // Windows 10: Explorer re-expands the task buttons on its own layout passes; narrow them again.
     if (g_rebar && IsWindow(g_rebar)) {

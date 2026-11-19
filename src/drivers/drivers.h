@@ -155,6 +155,7 @@ void PollPhoneLink(PollContext& ctx);  // phone linked with Microsoft Phone Link
 void PollGalaxyBuds(PollContext& ctx); // Samsung Galaxy Buds (Bluetooth RFCOMM, not HID)
 void PollNothingEar(PollContext& ctx); // Nothing / CMF Ear earbuds (Bluetooth RFCOMM NT Link, not HID)
 void PollAkko(PollContext& ctx);       // Akko V9 Dash Pro mouse (38EE:000C, FF1C:0092)
+void PollSoundcore(PollContext& ctx);  // Anker Soundcore Bluetooth headphones / earbuds (RFCOMM)
 void PollMoondrop(PollContext& ctx);   // MOONDROP GM01 Pro headset (WalkPlay 2.4 GHz dongle)
 void PollAlienware(PollContext& ctx);  // Alienware AW920H headset on its 2.4 GHz dongle (413C:A515)
 void PollPressPlayIcarus(PollContext& ctx);  // ICARUS V2 Nearlink on its 7768:6434 receiver

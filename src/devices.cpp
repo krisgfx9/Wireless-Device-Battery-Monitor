@@ -135,6 +135,7 @@ std::vector<DeviceStatus> PollAllDevices() {
     PollPhoneLink(ctx);
     PollGalaxyBuds(ctx);  // before the Bluetooth fallback, which skips devices already listed by name
     PollNothingEar(ctx);  // before the Bluetooth fallback, which skips devices already listed by name
+    PollSoundcore(ctx);   // before the Bluetooth fallback: works even with Hands-Free AG disabled
     PollMoondrop(ctx);
     PollDarkrim(ctx);
     PollAlienware(ctx);
