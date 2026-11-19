@@ -6,28 +6,119 @@
 # Ubuntu:   sudo apt install g++ make libgtk-4-dev libcairo2-dev
 #
 # ./build-linux.sh          (from the repository root; same as: make -f linux/Makefile.linux)
+# ./build-linux.sh test     (run all portable unit & driver tests)
 # ./build-linux.sh clean
 
 CXX      ?= g++
 PKGCONFIG ?= pkg-config
 CXXFLAGS ?= -std=c++17 -O2 -Wall -Wno-missing-field-initializers
-GTK_CFLAGS := $(shell $(PKGCONFIG) --cflags gtk4 cairo)
-GTK_LIBS   := $(shell $(PKGCONFIG) --libs gtk4 cairo)
+GTK_CFLAGS := $(shell $(PKGCONFIG) --cflags gtk4 cairo 2>/dev/null)
+GTK_LIBS   := $(shell $(PKGCONFIG) --libs gtk4 cairo 2>/dev/null)
 
-# Phase 1: famous vendors whose drivers only need the portable HID API.
+# All portable vendor HID drivers (excludes Windows-only airpods.cpp, atk_serial.cpp,
+# ble_adverts.cpp, fastpair.cpp, galaxy_buds.cpp, gamesir_ble.cpp, generic.cpp,
+# nothing_ear.cpp, phonelink.cpp, xinput.cpp which have Linux counterparts or WinRT BLE).
 DRIVERS := \
-    src/drivers/glorious.cpp \
-    src/drivers/kysona.cpp \
-    src/drivers/logitech.cpp \
-    src/drivers/razer.cpp \
-    src/drivers/steelseries.cpp \
-    src/drivers/corsair.cpp \
-    src/drivers/hyperx.cpp \
-    src/drivers/playstation.cpp \
+    src/drivers/ajazz_ak992.cpp \
+    src/drivers/akg.cpp \
+    src/drivers/akko.cpp \
+    src/drivers/alienware.cpp \
+    src/drivers/arbiter.cpp \
+    src/drivers/areson.cpp \
+    src/drivers/astro.cpp \
+    src/drivers/atk_bitmouse.cpp \
+    src/drivers/atk_keyboard.cpp \
+    src/drivers/audeze.cpp \
+    src/drivers/aula_mouse.cpp \
+    src/drivers/aula.cpp \
+    src/drivers/barracuda_pro.cpp \
+    src/drivers/beitong.cpp \
+    src/drivers/cherry.cpp \
+    src/drivers/chimera.cpp \
     src/drivers/coolermaster.cpp \
-    src/drivers/finalmouse.cpp
+    src/drivers/corsair.cpp \
+    src/drivers/dareu.cpp \
+    src/drivers/darkrim.cpp \
+    src/drivers/darmoshark.cpp \
+    src/drivers/eightbitdo.cpp \
+    src/drivers/endgame_we.cpp \
+    src/drivers/endgame.cpp \
+    src/drivers/endorfy.cpp \
+    src/drivers/eweadn.cpp \
+    src/drivers/fantech.cpp \
+    src/drivers/finalmouse.cpp \
+    src/drivers/flydigi.cpp \
+    src/drivers/fractal.cpp \
+    src/drivers/gamesir.cpp \
+    src/drivers/glorious.cpp \
+    src/drivers/headsetcontrol.cpp \
+    src/drivers/hyperx.cpp \
+    src/drivers/jabra.cpp \
+    src/drivers/jbl.cpp \
+    src/drivers/keychron.cpp \
+    src/drivers/kysona.cpp \
+    src/drivers/lamzu.cpp \
+    src/drivers/logitech_g435_0adf.cpp \
+    src/drivers/logitech.cpp \
+    src/drivers/machenike.cpp \
+    src/drivers/maono.cpp \
+    src/drivers/mchose_a5.cpp \
+    src/drivers/mchose_g3.cpp \
+    src/drivers/mchose_headset.cpp \
+    src/drivers/mchose_keyboard.cpp \
+    src/drivers/mchose_modern.cpp \
+    src/drivers/mchose.cpp \
+    src/drivers/misc_mice.cpp \
+    src/drivers/moondrop.cpp \
+    src/drivers/msi.cpp \
+    src/drivers/niceboy.cpp \
+    src/drivers/ninjutso.cpp \
+    src/drivers/nuphy.cpp \
+    src/drivers/nzxt.cpp \
+    src/drivers/plantronics.cpp \
+    src/drivers/playstation.cpp \
+    src/drivers/pulsar.cpp \
+    src/drivers/rapoo.cpp \
+    src/drivers/rawm.cpp \
+    src/drivers/razer_headset.cpp \
+    src/drivers/razer.cpp \
+    src/drivers/redragon_evision.cpp \
+    src/drivers/rog.cpp \
+    src/drivers/rongyuan.cpp \
+    src/drivers/royal_kludge.cpp \
+    src/drivers/scyrox.cpp \
+    src/drivers/semico.cpp \
+    src/drivers/sonix.cpp \
+    src/drivers/sony_inzone.cpp \
+    src/drivers/sprime.cpp \
+    src/drivers/steam_controller.cpp \
+    src/drivers/steelseries_elite.cpp \
+    src/drivers/steelseries.cpp \
+    src/drivers/switch_pro.cpp \
+    src/drivers/turtlebeach.cpp \
+    src/drivers/vaxee.cpp \
+    src/drivers/vgn.cpp \
+    src/drivers/via_dongle.cpp \
+    src/drivers/wlmouse.cpp \
+    src/drivers/xenta_protocol.cpp \
+    src/drivers/zenith.cpp \
+    src/drivers/zowie.cpp
 
-SRC := src/linux/hid_linux.cpp src/linux/devices_linux.cpp src/linux/main_linux.cpp $(DRIVERS)
+CORE_LINUX := \
+    src/linux/hid_linux.cpp \
+    src/linux/devices_linux.cpp \
+    src/linux/power_linux.cpp \
+    src/linux/bt_rfcomm_linux.cpp \
+    src/linux/atk_serial_linux.cpp \
+    src/linux/i18n_linux.cpp \
+    src/linux/ui_linux.cpp \
+    src/linux/main_linux.cpp
+
+SHARED_CORE := \
+    src/brands.cpp \
+    src/labels.cpp
+
+SRC := $(CORE_LINUX) $(SHARED_CORE) $(DRIVERS)
 OBJ := $(patsubst src/%.cpp,build/linux/%.o,$(SRC))
 TARGET := wireless-battery
 
@@ -38,12 +129,31 @@ build/linux/%.o: src/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(GTK_CFLAGS) -c $< -o $@
 
+UNAME_S  := $(shell uname -s)
+
 test:
 	@mkdir -p build/linux
-	$(CXX) $(CXXFLAGS) tests/linux_hid_test.cpp -o build/linux/linux_hid_test
-	./build/linux/linux_hid_test
-	$(CXX) $(CXXFLAGS) tests/json_output_test.cpp -o build/linux/json_output_test
-	./build/linux/json_output_test
+ifeq ($(UNAME_S),Linux)
+	$(CXX) $(CXXFLAGS) tests/linux_hid_test.cpp -o build/linux/linux_hid_test && ./build/linux/linux_hid_test
+endif
+	$(CXX) $(CXXFLAGS) tests/json_output_test.cpp -o build/linux/json_output_test && ./build/linux/json_output_test
+	$(CXX) $(CXXFLAGS) tests/history_model_test.cpp -o build/linux/history_model_test && ./build/linux/history_model_test
+	$(CXX) $(CXXFLAGS) tests/runtime_estimate_test.cpp -o build/linux/runtime_estimate_test && ./build/linux/runtime_estimate_test
+	$(CXX) $(CXXFLAGS) tests/alert_rules_test.cpp -o build/linux/alert_rules_test && ./build/linux/alert_rules_test
+	$(CXX) $(CXXFLAGS) tests/device_aliases_test.cpp -o build/linux/device_aliases_test && ./build/linux/device_aliases_test
+	$(CXX) $(CXXFLAGS) tests/aula_mouse_driver_test.cpp src/drivers/aula_mouse.cpp -o build/linux/aula_mouse_driver_test && ./build/linux/aula_mouse_driver_test
+	$(CXX) $(CXXFLAGS) tests/galaxy_buds_protocol_test.cpp -o build/linux/galaxy_buds_protocol_test && ./build/linux/galaxy_buds_protocol_test
+	$(CXX) $(CXXFLAGS) tests/nothing_ear_protocol_test.cpp -o build/linux/nothing_ear_protocol_test && ./build/linux/nothing_ear_protocol_test
+	$(CXX) $(CXXFLAGS) tests/rapoo_protocol_test.cpp -o build/linux/rapoo_protocol_test && ./build/linux/rapoo_protocol_test
+	$(CXX) $(CXXFLAGS) tests/rawm_protocol_test.cpp -o build/linux/rawm_protocol_test && ./build/linux/rawm_protocol_test
+	$(CXX) $(CXXFLAGS) -Isrc tests/xenta_protocol_test.cpp src/drivers/xenta_protocol.cpp -o build/linux/xenta_protocol_test && ./build/linux/xenta_protocol_test
+	$(CXX) $(CXXFLAGS) tests/gamesir_ble_protocol_test.cpp -o build/linux/gamesir_ble_protocol_test && ./build/linux/gamesir_ble_protocol_test
+	$(CXX) $(CXXFLAGS) tests/brands_test.cpp src/brands.cpp -o build/linux/brands_test && ./build/linux/brands_test
+	$(CXX) $(CXXFLAGS) tests/labels_test.cpp src/labels.cpp -o build/linux/labels_test && ./build/linux/labels_test
+	$(CXX) $(CXXFLAGS) tests/logitech_g435_0adf_test.cpp -o build/linux/logitech_g435_0adf_test && ./build/linux/logitech_g435_0adf_test
+	$(CXX) $(CXXFLAGS) tests/xbox_bluetooth_identity_test.cpp -o build/linux/xbox_bluetooth_identity_test && ./build/linux/xbox_bluetooth_identity_test
+	$(CXX) $(CXXFLAGS) tests/update_core_test.cpp src/update_core.cpp -o build/linux/update_core_test && ./build/linux/update_core_test
+	$(CXX) $(CXXFLAGS) tests/alienware_driver_test.cpp src/drivers/alienware.cpp -o build/linux/alienware_driver_test && ./build/linux/alienware_driver_test
 
 clean:
 	rm -rf build/linux $(TARGET)
