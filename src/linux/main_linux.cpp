@@ -1,8 +1,7 @@
-// Linux entry point: a StatusNotifierItem (system tray) app built with GTK4/GIO.
+// Linux entry point: a StatusNotifierItem (system tray) + floating taskbar widget app built with GTK4/GIO.
 //
-// Kept separate from src/main.cpp (Win32 tray + taskbar widget) so the Windows build is not
-// touched. The polling logic and all vendor drivers are shared; only the presentation layer and
-// settings storage differ.
+// 1:1 GUI and menu parity with src/main.cpp (Windows). The polling logic and all vendor drivers are
+// shared; only the presentation layer and settings storage ($XDG_CONFIG_HOME/wireless-battery/config.ini) differ.
 #include "../platform_compat.h"
 #include "../alert_rules.h"
 #include "../brands.h"
@@ -20,6 +19,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <climits>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -58,7 +58,8 @@ namespace {
 const char* kAppId = "com.github.krisgfx9.WirelessBattery";
 const char* kSniPath = "/org/kde/StatusNotifierItem";
 const char* kMenuPath = "/Menu";
-constexpr int kPollSeconds = 60;
+constexpr int kPollIntervals[] = { 30, 60, 120, 300, 600, 900, 1800, 3600 };
+constexpr int kPollIntervalCount = sizeof(kPollIntervals) / sizeof(kPollIntervals[0]);
 constexpr int kLowBattery = 15;
 constexpr int kIconSize = 64;
 
@@ -81,24 +82,70 @@ struct State {
     GVariant* pixmap = nullptr;           // a(iiay), cached for SNI property reads
     std::string tooltip = "BatteryHub";
     std::vector<DeviceStatus> devices;
-    std::vector<std::string> deviceActions;
+    std::map<std::wstring, int> lastKnownPct;
     std::vector<MenuNode> menuNodes;      // com.canonical.dbusmenu tree (id 0 is the root)
     int menuRevision = 0;
     std::mutex mu;
     std::condition_variable cv;
     std::vector<DeviceStatus> pending;
     std::atomic<bool> stop{ false };
+    std::atomic<int> pollSeconds{ 60 };
     bool wake = false;
     std::set<std::wstring> hidden;
+    std::vector<std::wstring> order;
     aliases::AliasMap aliases;
     std::map<std::wstring, int> alertOverrides;
     std::map<std::wstring, bool> alertLatches;
     bool useBrandAccents = true;
     bool hideLastKnown = false;
+    bool showDisconnectedDevices = false;
+    bool recordHistory = true;
+    bool wantWidget = false;
+    bool widgetBackground = false;
+    bool stacked = false;
     bool autostart = false;
+    bool demo = false;
     bool openHistoryOnStart = false;
 };
 State g;
+
+// 1:1 DemoDevices() from src/main.cpp lines 995-1030
+std::vector<DeviceStatus> DemoDevices() {
+    auto make = [](const wchar_t* key, const wchar_t* name, DeviceKind kind, int pct, unsigned short vid, bool charging) {
+        DeviceStatus s;
+        s.key = key;
+        s.name = name;
+        s.kind = kind;
+        s.percent = pct;
+        s.vid = vid;
+        s.charging = charging;
+        s.via = L"demo";
+        return s;
+    };
+    std::vector<DeviceStatus> devices = {
+        make(L"razer:demo", L"Razer DeathAdder V3 Pro", DeviceKind::Mouse, 78, 0x1532, false),
+        make(L"demo:logi", L"Logitech G PRO X 2 LIGHTSPEED", DeviceKind::Headset, 64, 0x046D, false),
+        make(L"steelseries:demo", L"SteelSeries Arctis Nova 7", DeviceKind::Headset, 55, 0, false),
+        make(L"hsc:1b1c:0a6b", L"Corsair HS80 RGB Wireless", DeviceKind::Headset, 81, 0x1B1C, false),
+        make(L"hyperx:demo", L"HyperX Cloud III Wireless", DeviceKind::Headset, 47, 0, false),
+        make(L"rog:demo", L"ROG Harpe Ace", DeviceKind::Mouse, 90, 0, false),
+        make(L"zowie:demo", L"ZOWIE EC2-CW", DeviceKind::Mouse, 66, 0x04A5, false),
+        make(L"bt:demo-ps", L"Wireless Controller", DeviceKind::Gamepad, 38, 0x054C, false),
+        make(L"xbox:demo", L"Xbox Wireless Controller", DeviceKind::Gamepad, 72, 0x045E, false),
+        make(L"bt:demo-buds", L"Galaxy Buds3 Pro", DeviceKind::Headset, 59, 0, false),
+        make(L"airpods:demo", L"AirPods Pro", DeviceKind::Headset, 85, 0, false),
+        make(L"jabra:demo", L"Jabra Evolve2 65", DeviceKind::Headset, 23, 0x0B0E, false),
+        make(L"jbl:demo", L"JBL Quantum 910", DeviceKind::Headset, 70, 0x0ECB, false),
+        make(L"coolermaster:demo", L"Cooler Master MM712", DeviceKind::Mouse, 12, 0x2516, false),
+        make(L"steam:demo", L"Steam Controller", DeviceKind::Gamepad, 50, 0x28DE, true),
+        make(L"bt:demo-plain", L"Bluetooth Headphones", DeviceKind::Headset, 100, 0, true),
+    };
+    DeviceStatus offline = make(L"demo:offline-receiver", L"Offline wireless headset", DeviceKind::Headset, -1, 0, false);
+    offline.via = L"2.4 GHz receiver";
+    offline.connected = false;
+    devices.push_back(offline);
+    return devices;
+}
 
 void ClearMenuNodes() {
     for (auto& n : g.menuNodes) {
@@ -112,6 +159,15 @@ void ClearMenuNodes() {
 
 std::wstring DeviceDisplayName(const DeviceStatus& s) {
     return aliases::DisplayName(g.aliases, s.key, s.name);
+}
+
+void OpenUrl(const char* url) {
+    if (!url || !*url) return;
+    pid_t pid = fork();
+    if (pid == 0) {
+        execlp("xdg-open", "xdg-open", url, static_cast<char*>(nullptr));
+        _exit(0);
+    }
 }
 
 // ---- settings (GKeyFile under $XDG_CONFIG_HOME) ------------------------------------------------
@@ -148,12 +204,29 @@ void LoadSettings() {
     if (hidden) {
         for (int i = 0; hidden[i]; i++) g.hidden.insert(Utf8ToWide(hidden[i]));
     }
+    g_autofree gchar** orderList = g_key_file_get_string_list(kf, "general", "order", nullptr, nullptr);
+    if (orderList) {
+        for (int i = 0; orderList[i]; i++) g.order.push_back(Utf8ToWide(orderList[i]));
+    }
     g.hideLastKnown = g_key_file_get_boolean(kf, "general", "hide-last-known", nullptr) != FALSE;
+    g.showDisconnectedDevices = g_key_file_get_boolean(kf, "general", "show-disconnected", nullptr) != FALSE;
+    if (g_key_file_has_key(kf, "general", "record-history", nullptr)) {
+        g.recordHistory = g_key_file_get_boolean(kf, "general", "record-history", nullptr) != FALSE;
+    } else {
+        g.recordHistory = true;
+    }
+    g.wantWidget = g_key_file_get_boolean(kf, "general", "taskbar-widget", nullptr) != FALSE;
+    g.widgetBackground = g_key_file_get_boolean(kf, "general", "widget-background", nullptr) != FALSE;
+    g.stacked = g_key_file_get_boolean(kf, "general", "stacked-layout", nullptr) != FALSE;
     g.autostart = g_key_file_get_boolean(kf, "general", "autostart", nullptr) != FALSE;
     if (g_key_file_has_key(kf, "general", "brand-accents", nullptr)) {
         g.useBrandAccents = g_key_file_get_boolean(kf, "general", "brand-accents", nullptr) != FALSE;
     } else {
         g.useBrandAccents = true;
+    }
+    if (g_key_file_has_key(kf, "general", "poll-seconds", nullptr)) {
+        int ps = g_key_file_get_integer(kf, "general", "poll-seconds", nullptr);
+        g.pollSeconds = std::clamp(ps, 30, 24 * 60 * 60);
     }
 
     // Load [aliases]
@@ -207,9 +280,23 @@ void SaveSettings() {
     if (ptrs.empty()) g_key_file_remove_key(kf, "general", "hidden", nullptr);
     else g_key_file_set_string_list(kf, "general", "hidden", ptrs.data(), ptrs.size());
 
+    if (g.order.size() > 64) g.order.resize(64);
+    std::vector<std::string> orderItems;
+    for (const auto& k : g.order) orderItems.push_back(WideToUtf8(k));
+    std::vector<const char*> orderPtrs;
+    for (const auto& s : orderItems) orderPtrs.push_back(s.c_str());
+    if (orderPtrs.empty()) g_key_file_remove_key(kf, "general", "order", nullptr);
+    else g_key_file_set_string_list(kf, "general", "order", orderPtrs.data(), orderPtrs.size());
+
     g_key_file_set_boolean(kf, "general", "hide-last-known", g.hideLastKnown);
+    g_key_file_set_boolean(kf, "general", "show-disconnected", g.showDisconnectedDevices);
+    g_key_file_set_boolean(kf, "general", "record-history", g.recordHistory);
+    g_key_file_set_boolean(kf, "general", "taskbar-widget", g.wantWidget);
+    g_key_file_set_boolean(kf, "general", "widget-background", g.widgetBackground);
+    g_key_file_set_boolean(kf, "general", "stacked-layout", g.stacked);
     g_key_file_set_boolean(kf, "general", "autostart", g.autostart);
     g_key_file_set_boolean(kf, "general", "brand-accents", g.useBrandAccents);
+    g_key_file_set_integer(kf, "general", "poll-seconds", g.pollSeconds.load());
 
     // Save [aliases]
     g_key_file_remove_group(kf, "aliases", nullptr);
@@ -277,7 +364,6 @@ GVariant* RenderPixmap(int pct, bool charging, bool dim, bool low, Accent accent
     double alpha = dim ? 0.45 : 1.0;
 
     if (useBrand && !low && !charging) {
-        // Subtle brand glow behind the digits
         cairo_pattern_t* glow = cairo_pattern_create_radial(S * 0.5, S * 0.45, 2.0, S * 0.5, S * 0.45, S * 0.45);
         cairo_pattern_add_color_stop_rgba(glow, 0.0, brandR, brandG, brandB, 0.25 * alpha);
         cairo_pattern_add_color_stop_rgba(glow, 1.0, brandR, brandG, brandB, 0.0);
@@ -333,13 +419,16 @@ GVariant* RenderPixmap(int pct, bool charging, bool dim, bool low, Accent accent
     return g_variant_ref_sink(arr);
 }
 
-// ---- presentation state -----------------------------------------------------------------------
+// ---- presentation state (1:1 with src/main.cpp) -----------------------------------------------
 
 std::wstring StatusText(const DeviceStatus& s) {
     if (!s.connected) return i18n::Tr(L"off / not connected");
     std::wstring t;
+    auto lastIt = g.lastKnownPct.find(s.key);
+    int lastPct = lastIt != g.lastKnownPct.end() ? lastIt->second : -1;
     if (!s.levelText.empty() && s.percent >= 0) t = i18n::Tr(s.levelText);
     else if (s.percent >= 0) t = std::to_wstring(s.percent) + L"%";
+    else if (lastPct >= 0) t = i18n::Fmt(L"{percent}% (last known)", { { L"percent", std::to_wstring(lastPct) } });
     else t = i18n::Tr(L"unknown");
     if (!s.detail.empty() && s.percent >= 0) t += L" (" + s.detail + L")";
     if (s.full || (s.charging && s.percent >= 100)) t += std::wstring(L", ") + i18n::Tr(L"fully charged");
@@ -348,14 +437,14 @@ std::wstring StatusText(const DeviceStatus& s) {
     return t;
 }
 
-bool IsVisible(const DeviceStatus& s) {
-    if (g.hidden.count(s.key)) return false;
-    if (g.hideLastKnown && (!s.connected || s.asleep || (s.percent < 0))) return false;
-    return true;
+bool IsEntryHidden(const DeviceStatus& s) {
+    if (g.hidden.count(s.key)) return true;
+    if (g.showDisconnectedDevices && !s.connected) return false;
+    return g.hideLastKnown && (s.asleep || s.percent < 0);
 }
 
-bool IsFilteredOutBySleep(const DeviceStatus& s) {
-    return g.hideLastKnown && (!s.connected || s.asleep || (s.percent < 0));
+bool IsShown(const DeviceStatus& s) {
+    return (s.connected || g.showDisconnectedDevices) && !IsEntryHidden(s);
 }
 
 int KindOrder(DeviceKind k) {
@@ -369,13 +458,24 @@ int KindOrder(DeviceKind k) {
     }
 }
 
-std::vector<const DeviceStatus*> SortedDevices(bool visibleOnly) {
+// OrderedEntries(shownOnly) matching src/main.cpp lines 558-574
+std::vector<const DeviceStatus*> OrderedDevices(bool shownOnly) {
     std::vector<const DeviceStatus*> list;
     for (const auto& s : g.devices) {
-        if (visibleOnly ? !IsVisible(s) : IsFilteredOutBySleep(s)) continue;
-        list.push_back(&s);
+        if (!shownOnly) {
+            if (!s.connected && !g.showDisconnectedDevices) continue;
+            list.push_back(&s);
+        } else if (IsShown(s)) {
+            list.push_back(&s);
+        }
     }
-    std::sort(list.begin(), list.end(), [](const DeviceStatus* a, const DeviceStatus* b) {
+    auto rank = [](const DeviceStatus* d) {
+        auto it = std::find(g.order.begin(), g.order.end(), d->key);
+        return it == g.order.end() ? INT_MAX : static_cast<int>(it - g.order.begin());
+    };
+    std::stable_sort(list.begin(), list.end(), [&](const DeviceStatus* a, const DeviceStatus* b) {
+        int ra = rank(a), rb = rank(b);
+        if (ra != rb) return ra < rb;
         int ka = KindOrder(a->kind), kb = KindOrder(b->kind);
         if (ka != kb) return ka < kb;
         std::wstring na = DeviceDisplayName(*a), nb = DeviceDisplayName(*b);
@@ -396,7 +496,6 @@ void SendLowBatteryNotification(const DeviceStatus& s) {
         { L"percent", std::to_wstring(s.percent) }
     }));
 
-    // 1. Send via org.freedesktop.Notifications.Notify over session D-Bus
     bool sentDbus = false;
     if (g.conn) {
         GVariantBuilder actions;
@@ -433,7 +532,6 @@ void SendLowBatteryNotification(const DeviceStatus& s) {
         if (err) g_error_free(err);
     }
 
-    // 2. Also send via GNotification when GApplication is registered (fallback / GNOME integration)
     if (g.app && !sentDbus) {
         g_autoptr(GNotification) notif = g_notification_new(title.c_str());
         g_notification_set_body(notif, body.c_str());
@@ -466,6 +564,10 @@ void AddMenuProperties(GVariantBuilder& props, const MenuNode* n) {
     if (n->submenu) {
         g_variant_builder_add(&props, "{sv}", "type", g_variant_new_string("standard"));
         g_variant_builder_add(&props, "{sv}", "children-display", g_variant_new_string("submenu"));
+        if (n->toggle) {
+            g_variant_builder_add(&props, "{sv}", "toggle-type", g_variant_new_string("checkmark"));
+            g_variant_builder_add(&props, "{sv}", "toggle-state", g_variant_new_int32(n->checked ? 1 : 0));
+        }
         return;
     }
     g_variant_builder_add(&props, "{sv}", "type", g_variant_new_string(n->toggle ? "checkbox" : "standard"));
@@ -511,84 +613,104 @@ int AddMenuNode(int parent, const std::string& label, const std::string& action,
     return id;
 }
 
+// 1:1 Menu Layout matching src/main.cpp ShowMenu() lines 809-933
 void RebuildMenu() {
     if (!g.app) return;
     ClearMenuNodes();
 
-    auto list = SortedDevices(false);
-    int shown = 0;
-    for (const auto* s : list) {
-        std::wstring disp = DeviceDisplayName(*s);
-        std::string label = WideToUtf8(disp) + ": " + WideToUtf8(StatusText(*s));
-        if (!s->via.empty()) {
-            label += " [" + WideToUtf8(i18n::Tr(s->via)) + "]";
-        }
-        bool isShownInTray = !g.hidden.count(s->key);
-        AddMenuNode(0, label, "toggle-device", false, true, isShownInTray, false,
-                    g_variant_new_string(WideToUtf8(s->key).c_str()));
-        shown++;
-    }
-    if (!shown) {
+    auto all = OrderedDevices(false);
+    auto shown = OrderedDevices(true);
+
+    if (all.empty()) {
         AddMenuNode(0, WideToUtf8(i18n::Tr(L"No devices with battery info found")), "",
                     false, false, false, false, nullptr, false);
+    } else {
+        AddMenuNode(0, WideToUtf8(i18n::Tr(L"Point at a device to show, hide or move it")), "",
+                    false, false, false, false, nullptr, false);
     }
+
+    for (const auto* s : all) {
+        const std::wstring& k = s->key;
+        std::string keyUtf8 = WideToUtf8(k);
+        bool isHidden = g.hidden.count(k) != 0;
+        auto pos = std::find(shown.begin(), shown.end(), s);
+        bool canLeft = pos != shown.end() && pos != shown.begin();
+        bool canRight = pos != shown.end() && (pos + 1) != shown.end();
+
+        std::wstring line = DeviceDisplayName(*s) + L":  " + StatusText(*s) + L"   [" + i18n::Tr(s->via) + L"]";
+        int devSubId = AddMenuNode(0, WideToUtf8(line), "", false, true, !isHidden, true);
+
+        // 1. Show in the tray / Show on the taskbar
+        std::wstring showLbl = g.wantWidget ? i18n::Tr(L"Show on the taskbar") : i18n::Tr(L"Show in the tray");
+        AddMenuNode(devSubId, WideToUtf8(showLbl), "toggle-device", false, true, !isHidden, false,
+                    g_variant_new_string(keyUtf8.c_str()));
+
+        AddMenuNode(devSubId, "", "", true);
+
+        // 2. Move up / Move down (or Move left / Move right in widget mode)
+        std::wstring movePrevLbl = g.wantWidget ? i18n::Tr(L"Move left") : i18n::Tr(L"Move up");
+        std::wstring moveNextLbl = g.wantWidget ? i18n::Tr(L"Move right") : i18n::Tr(L"Move down");
+        AddMenuNode(devSubId, WideToUtf8(movePrevLbl), "move-device", false, false, false, false,
+                    g_variant_new("(si)", keyUtf8.c_str(), -1), canLeft);
+        AddMenuNode(devSubId, WideToUtf8(moveNextLbl), "move-device", false, false, false, false,
+                    g_variant_new("(si)", keyUtf8.c_str(), +1), canRight);
+
+        AddMenuNode(devSubId, "", "", true);
+
+        // 3. Rename device... & Reset to original name
+        AddMenuNode(devSubId, WideToUtf8(i18n::Tr(L"Rename device...")), "rename-device", false, false, false, false,
+                    g_variant_new_string(keyUtf8.c_str()));
+        AddMenuNode(devSubId, WideToUtf8(i18n::Tr(L"Reset to original name")), "reset-device-name",
+                    false, false, false, false, g_variant_new_string(keyUtf8.c_str()),
+                    g.aliases.count(k) != 0);
+
+        // 4. Battery alerts submenu -> Use default (15%), Disable notifications, separator, 5%..40%
+        int alertSubId = AddMenuNode(devSubId, WideToUtf8(i18n::Tr(L"Battery alerts")), "", false, false, false, true);
+        int selectedThreshold = alerts::OverrideFor(g.alertOverrides, k);
+        AddMenuNode(alertSubId, WideToUtf8(i18n::Tr(L"Use default (15%)")), "set-alert", false, true,
+                    selectedThreshold == alerts::kUseDefault, false,
+                    g_variant_new("(si)", keyUtf8.c_str(), alerts::kUseDefault));
+        AddMenuNode(alertSubId, WideToUtf8(i18n::Tr(L"Disable notifications")), "set-alert", false, true,
+                    selectedThreshold == alerts::kDisabled, false,
+                    g_variant_new("(si)", keyUtf8.c_str(), alerts::kDisabled));
+        AddMenuNode(alertSubId, "", "", true);
+        for (int i = 0; i < alerts::kThresholdCount; ++i) {
+            int level = alerts::kThresholds[i];
+            std::string lvlLabel = std::to_string(level) + "%";
+            AddMenuNode(alertSubId, lvlLabel, "set-alert", false, true,
+                        selectedThreshold == level, false,
+                        g_variant_new("(si)", keyUtf8.c_str(), level));
+        }
+
+        // 5. Battery history...
+        AddMenuNode(devSubId, WideToUtf8(i18n::Tr(L"Battery history...")), "show-device-history",
+                    false, false, false, false, g_variant_new_string(keyUtf8.c_str()));
+    }
+
+    // Root toggles & options matching Windows order
+    AddMenuNode(0, WideToUtf8(i18n::Tr(L"Hide last known / asleep devices")),
+                "toggle-last-known", false, true, g.hideLastKnown);
+    AddMenuNode(0, WideToUtf8(i18n::Tr(L"Show disconnected devices")),
+                "toggle-show-disconnected", false, true, g.showDisconnectedDevices);
+    AddMenuNode(0, WideToUtf8(i18n::Tr(L"Record battery history")),
+                "toggle-record-history", false, true, g.recordHistory);
 
     AddMenuNode(0, "", "", true);
 
-    // Battery history...
-    AddMenuNode(0, WideToUtf8(i18n::Tr(L"Battery history...")), "show-history");
+    AddMenuNode(0, WideToUtf8(i18n::Tr(L"Show on the taskbar (icon + percentage)")),
+                "set-mode-widget", false, true, g.wantWidget);
+    AddMenuNode(0, WideToUtf8(i18n::Tr(L"Show as tray icons")),
+                "set-mode-tray", false, true, !g.wantWidget);
+    AddMenuNode(0, WideToUtf8(i18n::Tr(L"Background behind taskbar text (for transparent taskbars)")),
+                "toggle-widget-bg", false, true, g.widgetBackground, false, nullptr, g.wantWidget);
+    AddMenuNode(0, WideToUtf8(i18n::Tr(L"Icons above percentages (narrower)")),
+                "toggle-stacked", false, true, g.stacked, false, nullptr, g.wantWidget);
+    AddMenuNode(0, WideToUtf8(i18n::Tr(L"Brand colors (Razer green, Logitech blue, ...)")),
+                "toggle-brand-accents", false, true, g.useBrandAccents);
 
-    // Rename device submenu
-    int renameMenuId = AddMenuNode(0, WideToUtf8(i18n::Tr(L"Rename device")), "", false, false, false, true);
-    if (list.empty()) {
-        AddMenuNode(renameMenuId, WideToUtf8(i18n::Tr(L"No devices with battery info found")), "",
-                    false, false, false, false, nullptr, false);
-    } else {
-        for (const auto* s : list) {
-            std::wstring disp = DeviceDisplayName(*s);
-            std::string itemLabel = WideToUtf8(disp);
-            if (g.aliases.count(s->key) && disp != s->name) {
-                itemLabel += " (" + WideToUtf8(s->name) + ")";
-            }
-            AddMenuNode(renameMenuId, itemLabel, "rename-device", false, false, false, false,
-                        g_variant_new_string(WideToUtf8(s->key).c_str()));
-        }
-    }
+    AddMenuNode(0, "", "", true);
 
-    // Battery alert submenu -> per-device threshold
-    // (Default (15%), 5%, 10%, 15%, 20%, 25%, 30%, 40%, Off)
-    int alertMenuId = AddMenuNode(0, WideToUtf8(i18n::Tr(L"Battery alert")), "", false, false, false, true);
-    if (list.empty()) {
-        AddMenuNode(alertMenuId, WideToUtf8(i18n::Tr(L"No devices with battery info found")), "",
-                    false, false, false, false, nullptr, false);
-    } else {
-        const int kMenuThresholds[] = { 5, 10, 15, 20, 25, 30, 40 };
-        for (const auto* s : list) {
-            std::string devLabel = WideToUtf8(DeviceDisplayName(*s));
-            int devAlertId = AddMenuNode(alertMenuId, devLabel, "", false, false, false, true);
-            int currentOverride = alerts::OverrideFor(g.alertOverrides, s->key);
-            std::string keyUtf8 = WideToUtf8(s->key);
-
-            std::string defaultLabel = WideToUtf8(i18n::Tr(L"Default (15%)"));
-            AddMenuNode(devAlertId, defaultLabel, "set-alert", false, true,
-                        currentOverride == alerts::kUseDefault, false,
-                        g_variant_new("(si)", keyUtf8.c_str(), alerts::kUseDefault));
-
-            for (int level : kMenuThresholds) {
-                std::string lvlLabel = std::to_string(level) + "%";
-                AddMenuNode(devAlertId, lvlLabel, "set-alert", false, true,
-                            currentOverride == level, false,
-                            g_variant_new("(si)", keyUtf8.c_str(), level));
-            }
-
-            std::string offLabel = WideToUtf8(i18n::Tr(L"Off"));
-            AddMenuNode(devAlertId, offLabel, "set-alert", false, true,
-                        currentOverride == alerts::kDisabled, false,
-                        g_variant_new("(si)", keyUtf8.c_str(), alerts::kDisabled));
-        }
-    }
-
-    // Language submenu -> Automatic + all i18n::Languages() (including O'zbekcha)
+    // Language submenu -> Automatic + all i18n::Languages() (including O'zbekcha) + Add your own language...
     i18n::Reload();
     auto langs = i18n::Languages();
     std::wstring currentLang = i18n::Current();
@@ -604,19 +726,26 @@ void RebuildMenu() {
     AddMenuNode(langMenuId, "", "", true);
     AddMenuNode(langMenuId, WideToUtf8(i18n::Tr(L"Add your own language...")), "lang-open-folder");
 
-    AddMenuNode(0, "", "", true);
+    // Check battery every -> 30 s, 1 min, 2 min, 5 min, 10 min, 15 min, 30 min, 60 min
+    int pollMenuId = AddMenuNode(0, WideToUtf8(i18n::Tr(L"Check battery every")), "", false, false, false, true);
+    int curPoll = g.pollSeconds.load();
+    for (int i = 0; i < kPollIntervalCount; ++i) {
+        int s = kPollIntervals[i];
+        std::wstring label = s < 60
+            ? i18n::Fmt(L"{seconds} s", { { L"seconds", std::to_wstring(s) } })
+            : i18n::Fmt(L"{minutes} min", { { L"minutes", std::to_wstring(s / 60) } });
+        AddMenuNode(pollMenuId, WideToUtf8(label), "set-poll-interval", false, true,
+                    curPoll == s, false, g_variant_new_int32(s));
+    }
 
-    // Toggles: Brand accent colors, Hide sleeping / offline devices, Start at login
-    AddMenuNode(0, WideToUtf8(i18n::Tr(L"Brand accent colors")),
-                "toggle-brand-accents", false, true, g.useBrandAccents);
-    AddMenuNode(0, WideToUtf8(i18n::Tr(L"Hide sleeping / offline devices")),
-                "toggle-last-known", false, true, g.hideLastKnown);
+    AddMenuNode(0, WideToUtf8(i18n::Tr(L"Refresh now")), "refresh");
     AddMenuNode(0, WideToUtf8(i18n::Tr(L"Start at login")),
                 "toggle-autostart", false, true, g.autostart);
+    AddMenuNode(0, WideToUtf8(i18n::Tr(L"Request support for a device...")), "show-report");
+    AddMenuNode(0, WideToUtf8(i18n::Tr(L"Support the project...")), "open-support");
 
     AddMenuNode(0, "", "", true);
-    AddMenuNode(0, WideToUtf8(i18n::Tr(L"Refresh now")), "refresh");
-    AddMenuNode(0, WideToUtf8(i18n::Tr(L"Quit")), "quit");
+    AddMenuNode(0, WideToUtf8(i18n::Tr(L"Exit")), "quit");
 
     g.menuRevision++;
     if (g.conn)
@@ -630,8 +759,12 @@ void RecomputePresentation() {
     Accent accent = Accent::None;
     std::string tip = "BatteryHub";
 
-    auto visibleDevices = SortedDevices(true);
-    for (const auto* s : visibleDevices) {
+    auto visiblePtrs = OrderedDevices(true);
+    std::vector<DeviceStatus> visibleDevices;
+    visibleDevices.reserve(visiblePtrs.size());
+
+    for (const auto* s : visiblePtrs) {
+        visibleDevices.push_back(*s);
         any = true;
         int effThr = alerts::EffectiveThreshold(g.alertOverrides, s->key);
         int lowCutoff = effThr > 0 ? effThr : kLowBattery;
@@ -658,6 +791,12 @@ void RecomputePresentation() {
     EmitSignal("NewIcon");
     EmitSignal("NewToolTip");
     EmitSignal("NewStatus");
+
+    if (g.app) {
+        UpdateLinuxWidgetWindow(
+            g.app, g.wantWidget, visibleDevices, g.aliases,
+            g.useBrandAccents, g.widgetBackground, g.stacked, g.demo);
+    }
 }
 
 void ApplyResults() {
@@ -665,7 +804,12 @@ void ApplyResults() {
         std::lock_guard<std::mutex> lock(g.mu);
         g.devices.swap(g.pending);
     }
-    RecordLinuxBatteryHistory(g.devices);
+    for (const auto& s : g.devices) {
+        if (s.percent >= 0) g.lastKnownPct[s.key] = s.percent;
+    }
+    if (g.recordHistory && !g.demo) {
+        RecordLinuxBatteryHistory(g.devices);
+    }
 
     for (const auto& s : g.devices) {
         if (g.hidden.count(s.key)) continue;
@@ -683,7 +827,8 @@ void ApplyResults() {
 
     if (g.openHistoryOnStart && g.app) {
         g.openHistoryOnStart = false;
-        ShowLinuxBatteryHistoryWindow(g.app, g.devices, g.aliases);
+        std::wstring initialKey = g.devices.empty() ? std::wstring() : g.devices.front().key;
+        ShowLinuxBatteryHistoryWindow(g.app, g.devices, g.aliases, initialKey, g.demo);
     }
 }
 
@@ -843,7 +988,7 @@ static void dbusmenu_method_call(GDBusConnection*, const gchar*, const gchar*, c
             g_variant_get(params, "(i&s@v)", &id, &event, &data);
         }
         const MenuNode* node = FindNode(id);
-        if (node && !node->action.empty() && !strcmp(event, "clicked")) {
+        if (node && node->enabled && !node->action.empty() && !strcmp(event, "clicked")) {
             g_action_group_activate_action(G_ACTION_GROUP(g.app), node->action.c_str(), node->actionParam);
         }
         if (data) g_variant_unref(data);
@@ -917,7 +1062,25 @@ void OnQuitAction(GSimpleAction*, GVariant*, gpointer) {
 }
 
 void OnShowHistory(GSimpleAction*, GVariant*, gpointer) {
-    ShowLinuxBatteryHistoryWindow(g.app, g.devices, g.aliases);
+    std::wstring key = g.devices.empty() ? std::wstring() : g.devices.front().key;
+    ShowLinuxBatteryHistoryWindow(g.app, g.devices, g.aliases, key, g.demo);
+}
+
+void OnShowDeviceHistory(GSimpleAction*, GVariant* param, gpointer) {
+    std::wstring key;
+    if (param) {
+        const char* s = g_variant_get_string(param, nullptr);
+        if (s) key = Utf8ToWide(s);
+    }
+    ShowLinuxBatteryHistoryWindow(g.app, g.devices, g.aliases, key, g.demo);
+}
+
+void OnShowReport(GSimpleAction*, GVariant*, gpointer) {
+    ShowLinuxReportWindow(g.app);
+}
+
+void OnOpenSupport(GSimpleAction*, GVariant*, gpointer) {
+    OpenUrl("https://github.com/sponsors/krisgfx9");
 }
 
 void OnToggleBrandAccents(GSimpleAction* action, GVariant*, gpointer) {
@@ -930,6 +1093,46 @@ void OnToggleBrandAccents(GSimpleAction* action, GVariant*, gpointer) {
 void OnToggleLastKnown(GSimpleAction* action, GVariant*, gpointer) {
     g.hideLastKnown = !g.hideLastKnown;
     g_simple_action_set_state(action, g_variant_new_boolean(g.hideLastKnown));
+    SaveSettings();
+    RecomputePresentation();
+}
+
+void OnToggleShowDisconnected(GSimpleAction* action, GVariant*, gpointer) {
+    g.showDisconnectedDevices = !g.showDisconnectedDevices;
+    g_simple_action_set_state(action, g_variant_new_boolean(g.showDisconnectedDevices));
+    SaveSettings();
+    RecomputePresentation();
+}
+
+void OnToggleRecordHistory(GSimpleAction* action, GVariant*, gpointer) {
+    g.recordHistory = !g.recordHistory;
+    g_simple_action_set_state(action, g_variant_new_boolean(g.recordHistory));
+    SaveSettings();
+    RecomputePresentation();
+}
+
+void OnSetModeWidget(GSimpleAction*, GVariant*, gpointer) {
+    g.wantWidget = true;
+    SaveSettings();
+    RecomputePresentation();
+}
+
+void OnSetModeTray(GSimpleAction*, GVariant*, gpointer) {
+    g.wantWidget = false;
+    SaveSettings();
+    RecomputePresentation();
+}
+
+void OnToggleWidgetBg(GSimpleAction* action, GVariant*, gpointer) {
+    g.widgetBackground = !g.widgetBackground;
+    g_simple_action_set_state(action, g_variant_new_boolean(g.widgetBackground));
+    SaveSettings();
+    RecomputePresentation();
+}
+
+void OnToggleStacked(GSimpleAction* action, GVariant*, gpointer) {
+    g.stacked = !g.stacked;
+    g_simple_action_set_state(action, g_variant_new_boolean(g.stacked));
     SaveSettings();
     RecomputePresentation();
 }
@@ -948,6 +1151,34 @@ void OnToggleDevice(GSimpleAction*, GVariant* param, gpointer) {
     if (!keyStr) return;
     std::wstring key = Utf8ToWide(keyStr);
     if (!g.hidden.erase(key)) g.hidden.insert(key);
+    SaveSettings();
+    RecomputePresentation();
+}
+
+// 1:1 MoveEntry(key, dir) from src/main.cpp lines 793-807
+void OnMoveDevice(GSimpleAction*, GVariant* param, gpointer) {
+    if (!param) return;
+    const char* keyStr = nullptr;
+    gint32 dir = 0;
+    g_variant_get(param, "(&si)", &keyStr, &dir);
+    if (!keyStr || dir == 0) return;
+    std::wstring key = Utf8ToWide(keyStr);
+
+    auto list = OrderedDevices(true);
+    auto pos = std::find_if(list.begin(), list.end(), [&](const DeviceStatus* d) { return d->key == key; });
+    if (pos == list.end()) return;
+    ptrdiff_t i = pos - list.begin(), j = i + dir;
+    if (j < 0 || j >= static_cast<ptrdiff_t>(list.size())) return;
+    std::swap(list[i], list[j]);
+
+    std::vector<std::wstring> newOrder;
+    for (const auto* d : list) newOrder.push_back(d->key);
+    for (const auto& k : g.order) {
+        if (std::find(newOrder.begin(), newOrder.end(), k) == newOrder.end()) {
+            newOrder.push_back(k);
+        }
+    }
+    g.order = std::move(newOrder);
     SaveSettings();
     RecomputePresentation();
 }
@@ -982,6 +1213,16 @@ void OnRenameDevice(GSimpleAction*, GVariant* param, gpointer) {
     });
 }
 
+void OnResetDeviceName(GSimpleAction*, GVariant* param, gpointer) {
+    if (!param) return;
+    const char* keyStr = g_variant_get_string(param, nullptr);
+    if (!keyStr) return;
+    std::wstring key = Utf8ToWide(keyStr);
+    if (!g.aliases.erase(key)) return;
+    SaveSettings();
+    RecomputePresentation();
+}
+
 void OnSetAlert(GSimpleAction*, GVariant* param, gpointer) {
     if (!param) return;
     const char* keyStr = nullptr;
@@ -1003,6 +1244,17 @@ void OnSetAlert(GSimpleAction*, GVariant* param, gpointer) {
     g.cv.notify_all();
 }
 
+void OnSetPollInterval(GSimpleAction*, GVariant* param, gpointer) {
+    if (!param) return;
+    gint32 seconds = 60;
+    g_variant_get(param, "i", &seconds);
+    g.pollSeconds = std::clamp<int>(seconds, 30, 24 * 60 * 60);
+    SaveSettings();
+    RecomputePresentation();
+    { std::lock_guard<std::mutex> lock(g.mu); g.wake = true; }
+    g.cv.notify_all();
+}
+
 void OnSetLanguage(GSimpleAction*, GVariant* param, gpointer) {
     if (!param) return;
     const char* codeStr = g_variant_get_string(param, nullptr);
@@ -1018,12 +1270,24 @@ const GActionEntry kActions[] = {
     { "refresh", OnRefresh, nullptr, nullptr, nullptr, {} },
     { "quit", OnQuitAction, nullptr, nullptr, nullptr, {} },
     { "show-history", OnShowHistory, nullptr, nullptr, nullptr, {} },
+    { "show-device-history", OnShowDeviceHistory, "s", nullptr, nullptr, {} },
+    { "show-report", OnShowReport, nullptr, nullptr, nullptr, {} },
+    { "open-support", OnOpenSupport, nullptr, nullptr, nullptr, {} },
     { "toggle-brand-accents", OnToggleBrandAccents, nullptr, "true", nullptr, {} },
     { "toggle-last-known", OnToggleLastKnown, nullptr, "false", nullptr, {} },
+    { "toggle-show-disconnected", OnToggleShowDisconnected, nullptr, "false", nullptr, {} },
+    { "toggle-record-history", OnToggleRecordHistory, nullptr, "true", nullptr, {} },
+    { "set-mode-widget", OnSetModeWidget, nullptr, nullptr, nullptr, {} },
+    { "set-mode-tray", OnSetModeTray, nullptr, nullptr, nullptr, {} },
+    { "toggle-widget-bg", OnToggleWidgetBg, nullptr, "false", nullptr, {} },
+    { "toggle-stacked", OnToggleStacked, nullptr, "false", nullptr, {} },
     { "toggle-autostart", OnToggleAutostart, nullptr, "false", nullptr, {} },
     { "toggle-device", OnToggleDevice, "s", nullptr, nullptr, {} },
+    { "move-device", OnMoveDevice, "(si)", nullptr, nullptr, {} },
     { "rename-device", OnRenameDevice, "s", nullptr, nullptr, {} },
+    { "reset-device-name", OnResetDeviceName, "s", nullptr, nullptr, {} },
     { "set-alert", OnSetAlert, "(si)", nullptr, nullptr, {} },
+    { "set-poll-interval", OnSetPollInterval, "i", nullptr, nullptr, {} },
     { "set-lang", OnSetLanguage, "s", nullptr, nullptr, {} },
     { "lang-open-folder", OnOpenLangFolder, nullptr, nullptr, nullptr, {} },
 };
@@ -1035,7 +1299,8 @@ gboolean PushResults(gpointer) {
 
 void OnActivate(GApplication*) {
     if (g.openHistoryOnStart) {
-        ShowLinuxBatteryHistoryWindow(g.app, g.devices, g.aliases);
+        std::wstring key = g.devices.empty() ? std::wstring() : g.devices.front().key;
+        ShowLinuxBatteryHistoryWindow(g.app, g.devices, g.aliases, key, g.demo);
     }
 }
 
@@ -1043,14 +1308,15 @@ void OnActivate(GApplication*) {
 
 void Worker() {
     while (!g.stop) {
-        std::vector<DeviceStatus> result = PollAllDevices();
+        std::vector<DeviceStatus> result = g.demo ? DemoDevices() : PollAllDevices();
         {
             std::lock_guard<std::mutex> lock(g.mu);
             g.pending = std::move(result);
         }
         g_main_context_invoke(nullptr, PushResults, nullptr);
         std::unique_lock<std::mutex> lock(g.mu);
-        g.cv.wait_for(lock, std::chrono::seconds(kPollSeconds), [&] { return g.stop || g.wake; });
+        int waitSec = g.pollSeconds.load();
+        g.cv.wait_for(lock, std::chrono::seconds(waitSec), [&] { return g.stop || g.wake; });
         g.wake = false;
     }
 }
@@ -1064,7 +1330,7 @@ int ListToConsole(bool dump) {
         fwrite(u.c_str(), 1, u.size(), stdout);
         return 0;
     }
-    auto list = PollAllDevices();
+    auto list = g.demo ? DemoDevices() : PollAllDevices();
     if (list.empty()) printf("No devices with battery info found.\n");
     for (const auto& s : list) {
         Accent accent = brands::AccentFor(s);
@@ -1080,9 +1346,8 @@ int ListToConsole(bool dump) {
     return 0;
 }
 
-// Machine-readable device list for scripts and bar widgets. Shared with the Windows entry point.
 int ListJson() {
-    std::string out = DevicesToJson(PollAllDevices());
+    std::string out = DevicesToJson(g.demo ? DemoDevices() : PollAllDevices());
     fwrite(out.data(), 1, out.size(), stdout);
     return 0;
 }
@@ -1106,11 +1371,13 @@ int main(int argc, char** argv) {
     std::vector<char*> filteredArgv;
     filteredArgv.push_back(argv[0]);
 
+    bool wantList = false, wantJson = false, wantDump = false, wantQuit = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             printf("Usage: wireless-battery [option]\n"
                    "  (no option)  Run the tray app\n"
                    "  --history    Open the GTK4 Battery History & Insights window\n"
+                   "  --demo       Use 17 sample devices of every brand for UI preview\n"
                    "  --list       Print devices and battery levels, then exit\n"
                    "  --json       Print a JSON array of devices and battery levels, then exit\n"
                    "  --dump       Print all HID collections and devices, then exit\n"
@@ -1118,16 +1385,25 @@ int main(int argc, char** argv) {
                    "  -h, --help   Show this help\n");
             return 0;
         }
-        if (!strcmp(argv[i], "--list")) return ListToConsole(false);
-        if (!strcmp(argv[i], "--json")) return ListJson();
-        if (!strcmp(argv[i], "--dump")) return ListToConsole(true);
-        if (!strcmp(argv[i], "--quit")) return QuitRunning();
+        if (!strcmp(argv[i], "--demo")) {
+            g.demo = true;
+            continue;
+        }
         if (!strcmp(argv[i], "--history")) {
             g.openHistoryOnStart = true;
             continue;
         }
+        if (!strcmp(argv[i], "--list")) { wantList = true; continue; }
+        if (!strcmp(argv[i], "--json")) { wantJson = true; continue; }
+        if (!strcmp(argv[i], "--dump")) { wantDump = true; continue; }
+        if (!strcmp(argv[i], "--quit")) { wantQuit = true; continue; }
         filteredArgv.push_back(argv[i]);
     }
+
+    if (wantList) return ListToConsole(false);
+    if (wantJson) return ListJson();
+    if (wantDump) return ListToConsole(true);
+    if (wantQuit) return QuitRunning();
 
     LoadSettings();
     i18n::Load();

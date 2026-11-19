@@ -3,9 +3,11 @@
 #include "../brands.h"
 #include "../history_model.h"
 #include "../i18n.h"
+#include "../labels.h"
 #include "../runtime_estimate.h"
 
 #include <cairo/cairo.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cmath>
@@ -92,6 +94,20 @@ void EnsureLoaded() {
     g_free(contents);
 }
 
+// Exact 5-day discharge/recharge cycle from src/battery_history.cpp lines 109-121.
+std::vector<battery_history::Sample> DemoSamples(const std::wstring& key, int64_t now) {
+    std::vector<battery_history::Sample> points;
+    const int64_t start = now - 30 * kSecondsPerDay;
+    for (int i = 0; i <= 720; i += 3) {
+        const int cycleHour = (i + 60) % 120;  // five-day discharge/recharge cycle
+        const bool charging = cycleHour >= 108 && cycleHour <= 114;
+        int pct = cycleHour < 108 ? 96 - cycleHour / 2 :
+                  cycleHour == 108 ? 60 : cycleHour == 111 ? 78 : 96;
+        points.push_back({ key, start + static_cast<int64_t>(i) * 3600, pct, charging });
+    }
+    return points;
+}
+
 void InstallDarkCss() {
     static bool installed = false;
     if (installed) return;
@@ -102,57 +118,65 @@ void InstallDarkCss() {
         "  background-color: #0c111c;"
         "  color: #e8f0fc;"
         "}"
+        "window.batteryhub-widget {"
+        "  background-color: #0c111c;"
+        "  color: #e8f0fc;"
+        "}"
         ".bh-card {"
         "  background-color: #161e2d;"
         "  border: 1px solid #2f3f53;"
         "  border-radius: 12px;"
-        "  padding: 12px 16px;"
+        "  padding: 10px 14px;"
         "}"
-        ".bh-title {"
+        ".bh-headline {"
         "  color: #e8f0fc;"
-        "  font-size: 18px;"
-        "  font-weight: 700;"
+        "  font-size: 22px;"
+        "  font-weight: 600;"
+        "}"
+        ".bh-subtitle {"
+        "  color: #a5b6ca;"
+        "  font-size: 13px;"
         "}"
         ".bh-card-label {"
         "  color: #a5b6ca;"
-        "  font-size: 12px;"
-        "  font-weight: 600;"
+        "  font-size: 13px;"
+        "  font-weight: 500;"
         "}"
         ".bh-card-value {"
         "  color: #e8f0fc;"
-        "  font-size: 20px;"
-        "  font-weight: 700;"
+        "  font-size: 21px;"
+        "  font-weight: 600;"
         "}"
         ".bh-card-value-blue {"
         "  color: #5ba6ff;"
-        "  font-size: 20px;"
-        "  font-weight: 700;"
+        "  font-size: 21px;"
+        "  font-weight: 600;"
         "}"
         ".bh-card-value-green {"
         "  color: #3bd79e;"
-        "  font-size: 20px;"
-        "  font-weight: 700;"
+        "  font-size: 21px;"
+        "  font-weight: 600;"
         "}"
         ".bh-card-value-red {"
         "  color: #ff8493;"
-        "  font-size: 20px;"
-        "  font-weight: 700;"
+        "  font-size: 21px;"
+        "  font-weight: 600;"
         "}"
         ".bh-card-sub {"
         "  color: #a5b6ca;"
-        "  font-size: 12px;"
+        "  font-size: 13px;"
         "}"
         "button.bh-btn {"
         "  background-image: none;"
         "  background-color: #161e2d;"
         "  color: #a5b6ca;"
         "  border: 1px solid #2f3f53;"
-        "  border-radius: 10px;"
-        "  padding: 6px 14px;"
-        "  font-weight: 600;"
+        "  border-radius: 12px;"
+        "  padding: 7px 16px;"
+        "  font-weight: 500;"
         "}"
         "button.bh-btn:hover {"
-        "  background-color: #1f2b40;"
+        "  background-color: #263b53;"
         "  color: #e8f0fc;"
         "}"
         "button.bh-btn-active {"
@@ -160,22 +184,27 @@ void InstallDarkCss() {
         "  background-color: #1f4370;"
         "  color: #e8f0fc;"
         "  border: 1px solid #5ba6ff;"
-        "  border-radius: 10px;"
-        "  padding: 6px 14px;"
-        "  font-weight: 700;"
+        "  border-radius: 12px;"
+        "  padding: 7px 16px;"
+        "  font-weight: 600;"
         "}"
         "button.bh-btn-danger {"
         "  background-image: none;"
         "  background-color: #161e2d;"
         "  color: #ff8493;"
         "  border: 1px solid #2f3f53;"
-        "  border-radius: 10px;"
-        "  padding: 6px 14px;"
-        "  font-weight: 600;"
+        "  border-radius: 12px;"
+        "  padding: 7px 16px;"
+        "  font-weight: 500;"
         "}"
         "button.bh-btn-danger:hover {"
         "  background-color: #351a24;"
         "  border-color: #ff8493;"
+        "}"
+        "button.bh-btn-danger:disabled {"
+        "  background-color: #0c111c;"
+        "  color: #667588;"
+        "  border-color: #2a374a;"
         "}"
         "entry.bh-entry {"
         "  background-color: #161e2d;"
@@ -183,6 +212,12 @@ void InstallDarkCss() {
         "  border: 1px solid #2f3f53;"
         "  border-radius: 8px;"
         "  padding: 6px 10px;"
+        "}"
+        "textview.bh-textview, textview.bh-textview text {"
+        "  background-color: #0f1725;"
+        "  color: #e8f0fc;"
+        "  font-family: monospace;"
+        "  font-size: 12px;"
         "}";
 
     GtkCssProvider* provider = gtk_css_provider_new();
@@ -208,25 +243,41 @@ std::wstring FormatRemainingTime(double hours) {
     return TF(L"~{hours} h", { { L"hours", std::to_wstring(total) } });
 }
 
-std::string FormatRatePerHour(double pctPerHour) {
-    char buf[64]{};
-    std::snprintf(buf, sizeof(buf), "%.2f %%/h", pctPerHour);
-    return std::string(buf);
+void DrawRoundedRect(cairo_t* cr, double x, double y, double w, double h, double r) {
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, x + w - r, y + r, r, -M_PI / 2, 0);
+    cairo_arc(cr, x + w - r, y + h - r, r, 0, M_PI / 2);
+    cairo_arc(cr, x + r, y + h - r, r, M_PI / 2, M_PI);
+    cairo_arc(cr, x + r, y + r, r, M_PI, 3 * M_PI / 2);
+    cairo_close_path(cr);
 }
 
+void OpenUrlWithXdgOpen(const char* url) {
+    if (!url || !*url) return;
+    pid_t pid = fork();
+    if (pid == 0) {
+        execlp("xdg-open", "xdg-open", url, static_cast<char*>(nullptr));
+        _exit(0);
+    }
+}
+
+// ---- Battery History Window State (1:1 with src/battery_history.cpp) --------------------------
+
 struct HistoryWindowState {
+    GtkApplication* app = nullptr;
     GtkWidget* window = nullptr;
     GtkWidget* combo = nullptr;
     GtkWidget* btn24h = nullptr;
     GtkWidget* btn7d = nullptr;
     GtkWidget* btn30d = nullptr;
     GtkWidget* btnClear = nullptr;
-    GtkWidget* levelValueLabel = nullptr;
-    GtkWidget* levelSubLabel = nullptr;
-    GtkWidget* rateValueLabel = nullptr;
-    GtkWidget* rateSubLabel = nullptr;
+    GtkWidget* headlineLabel = nullptr;
+    GtkWidget* demoSubtitleLabel = nullptr;
+    GtkWidget* statTitleLabels[5]{};
+    GtkWidget* statValueLabels[5]{};
+    GtkWidget* etaTitleLabel = nullptr;
     GtkWidget* etaValueLabel = nullptr;
-    GtkWidget* etaSubLabel = nullptr;
+    GtkWidget* etaDetailsLabel = nullptr;
     GtkWidget* drawingArea = nullptr;
 
     std::vector<DeviceStatus> currentDevices;
@@ -234,6 +285,7 @@ struct HistoryWindowState {
     std::vector<std::wstring> deviceKeys;
     std::wstring selectedKey;
     int days = 7;
+    bool demo = false;
     bool updatingCombo = false;
 };
 
@@ -258,8 +310,22 @@ DeviceStatus FindDeviceStatus(const std::wstring& key) {
 }
 
 std::wstring ResolveDisplayName(const std::wstring& key) {
+    if (key.empty()) return L"BatteryHub";
     DeviceStatus st = FindDeviceStatus(key);
     return aliases::DisplayName(g_histWin.aliasesMap, key, st.name.empty() ? key : st.name);
+}
+
+std::vector<battery_history::Sample> VisibleHistorySamples(int64_t now) {
+    if (g_histWin.selectedKey.empty()) return {};
+    const int64_t since = now - static_cast<int64_t>(g_histWin.days) * kSecondsPerDay;
+    if (!g_histWin.demo) {
+        return g_store.For(g_histWin.selectedKey, since, now);
+    }
+    auto points = DemoSamples(g_histWin.selectedKey, now);
+    points.erase(std::remove_if(points.begin(), points.end(), [since](const battery_history::Sample& s) {
+        return s.timestamp < since;
+    }), points.end());
+    return points;
 }
 
 void UpdateRangeButtonStyles() {
@@ -272,6 +338,9 @@ void UpdateRangeButtonStyles() {
     setActive(g_histWin.btn24h, g_histWin.days == 1);
     setActive(g_histWin.btn7d, g_histWin.days == 7);
     setActive(g_histWin.btn30d, g_histWin.days == 30);
+    if (g_histWin.btnClear) {
+        gtk_widget_set_sensitive(g_histWin.btnClear, g_histWin.demo ? FALSE : TRUE);
+    }
 }
 
 void SetValueLabelClass(GtkWidget* label, const char* cssClass) {
@@ -287,69 +356,62 @@ void RefreshHistorySummaryAndChart() {
     if (!g_histWin.window) return;
     UpdateRangeButtonStyles();
 
+    std::wstring dispName = ResolveDisplayName(g_histWin.selectedKey);
+    std::wstring winTitle = std::wstring(T(L"Battery history")) + L" - " + dispName;
+    gtk_window_set_title(GTK_WINDOW(g_histWin.window), WideToUtf8(winTitle).c_str());
+
+    if (g_histWin.headlineLabel) {
+        std::wstring headline = std::wstring(T(L"Battery history")) + L"  •  " + dispName;
+        gtk_label_set_text(GTK_LABEL(g_histWin.headlineLabel), WideToUtf8(headline).c_str());
+    }
+    if (g_histWin.demoSubtitleLabel) {
+        gtk_label_set_text(GTK_LABEL(g_histWin.demoSubtitleLabel),
+                           WideToUtf8(T(L"Demo readings (not saved)")).c_str());
+        gtk_widget_set_visible(g_histWin.demoSubtitleLabel, g_histWin.demo ? TRUE : FALSE);
+    }
+
     const int64_t now = UtcNow();
-    const int64_t since = now - static_cast<int64_t>(g_histWin.days) * kSecondsPerDay;
-    const auto points = g_histWin.selectedKey.empty()
-        ? std::vector<battery_history::Sample>{}
-        : g_store.For(g_histWin.selectedKey, since, now);
+    const auto points = VisibleHistorySamples(now);
     const battery_history::Stats stats = battery_history::Summarize(points);
-    const auto allPoints = g_histWin.selectedKey.empty()
+    const auto forecastPoints = g_histWin.selectedKey.empty()
         ? std::vector<battery_history::Sample>{}
-        : g_store.For(g_histWin.selectedKey, now - battery_history::kRetentionSeconds, now);
-    const battery_history::RuntimeEstimate forecast = battery_history::EstimateRuntime(allPoints, now);
+        : (g_histWin.demo
+            ? DemoSamples(g_histWin.selectedKey, now)
+            : g_store.For(g_histWin.selectedKey, now - battery_history::kRetentionSeconds, now));
+    const battery_history::RuntimeEstimate forecast = battery_history::EstimateRuntime(forecastPoints, now);
 
-    DeviceStatus dev = FindDeviceStatus(g_histWin.selectedKey);
-
-    // 1. Current Level Card
-    int currentPct = dev.percent >= 0 ? dev.percent : (stats.count ? stats.last : -1);
-    bool isCharging = dev.connected ? dev.charging : (!points.empty() && points.back().charging);
-    std::string levelStr = currentPct >= 0 ? (std::to_string(currentPct) + "%") : "—";
-    if (isCharging && currentPct >= 0) {
-        levelStr += " (" + WideToUtf8(T(L"charging")) + ")";
-    } else if (dev.asleep && currentPct >= 0) {
-        levelStr += " (" + WideToUtf8(T(L"asleep")) + ")";
+    // Row 1 — 5 Equal Statistic Cards: Latest, Lowest, Highest, Change, Readings
+    const wchar_t* headings[5] = { L"Latest", L"Lowest", L"Highest", L"Change", L"Readings" };
+    std::wstring delta = L"—";
+    const char* deltaClass = "bh-card-value";
+    if (stats.count >= 2) {
+        const int change = stats.last - stats.first;
+        delta = (change > 0 ? L"+" : L"") + std::to_wstring(change) + L" " + T(L"pp");
+        deltaClass = change < 0 ? "bh-card-value-red" : (change > 0 ? "bh-card-value-green" : "bh-card-value");
     }
-    gtk_label_set_text(GTK_LABEL(g_histWin.levelValueLabel), levelStr.c_str());
-    if (isCharging) SetValueLabelClass(g_histWin.levelValueLabel, "bh-card-value-green");
-    else if (currentPct >= 0 && currentPct <= 15) SetValueLabelClass(g_histWin.levelValueLabel, "bh-card-value-red");
-    else SetValueLabelClass(g_histWin.levelValueLabel, "bh-card-value-blue");
-
-    std::string levelSub;
-    if (stats.count > 0) {
-        int change = stats.last - stats.first;
-        std::string deltaStr = (change > 0 ? "+" : "") + std::to_string(change) + " " + WideToUtf8(T(L"pp"));
-        levelSub = WideToUtf8(T(L"Lowest")) + ": " + std::to_string(stats.lowest) + "% · " +
-                   WideToUtf8(T(L"Highest")) + ": " + std::to_string(stats.highest) + "% · " +
-                   WideToUtf8(T(L"Change")) + ": " + deltaStr;
-    } else {
-        levelSub = WideToUtf8(T(L"No readings in this period"));
+    const std::wstring values[5] = {
+        stats.count ? std::to_wstring(stats.last) + L"%" : L"—",
+        stats.count ? std::to_wstring(stats.lowest) + L"%" : L"—",
+        stats.count ? std::to_wstring(stats.highest) + L"%" : L"—",
+        delta,
+        std::to_wstring(stats.count)
+    };
+    for (int i = 0; i < 5; ++i) {
+        if (g_histWin.statTitleLabels[i]) {
+            gtk_label_set_text(GTK_LABEL(g_histWin.statTitleLabels[i]), WideToUtf8(T(headings[i])).c_str());
+        }
+        if (g_histWin.statValueLabels[i]) {
+            const char* cls = (i == 0) ? "bh-card-value-blue" : (i == 3 ? deltaClass : "bh-card-value");
+            SetValueLabelClass(g_histWin.statValueLabels[i], cls);
+            gtk_label_set_text(GTK_LABEL(g_histWin.statValueLabels[i]), WideToUtf8(values[i]).c_str());
+        }
     }
-    gtk_label_set_text(GTK_LABEL(g_histWin.levelSubLabel), levelSub.c_str());
 
-    // 2. Discharge Rate Card
-    std::string rateStr = "— %/h";
-    std::string rateSub;
-    if (forecast.state == battery_history::RuntimeState::Ready && forecast.percentPerHour > 0.0) {
-        rateStr = FormatRatePerHour(forecast.percentPerHour);
-        int tenthsPerDay = static_cast<int>(std::round(forecast.percentPerHour * 240.0));
-        std::wstring ratePerDay = std::to_wstring(tenthsPerDay / 10) + L"." + std::to_wstring(tenthsPerDay % 10);
-        rateSub = WideToUtf8(TF(L"Recent discharge: {rate} pp/day · {count} readings", {
-            { L"rate", ratePerDay },
-            { L"count", std::to_wstring(forecast.sampleCount) }
-        }));
-        SetValueLabelClass(g_histWin.rateValueLabel, "bh-card-value");
-    } else if (forecast.state == battery_history::RuntimeState::Charging) {
-        rateStr = WideToUtf8(T(L"Currently charging"));
-        rateSub = WideToUtf8(T(L"Readings")) + ": " + std::to_string(stats.count);
-        SetValueLabelClass(g_histWin.rateValueLabel, "bh-card-value-green");
-    } else {
-        rateSub = WideToUtf8(T(L"Readings")) + ": " + std::to_string(stats.count);
-        SetValueLabelClass(g_histWin.rateValueLabel, "bh-card-value");
+    // Row 2 — Full-Width "Estimated time to empty" Card
+    if (g_histWin.etaTitleLabel) {
+        gtk_label_set_text(GTK_LABEL(g_histWin.etaTitleLabel),
+                           WideToUtf8(T(L"Estimated time to empty")).c_str());
     }
-    gtk_label_set_text(GTK_LABEL(g_histWin.rateValueLabel), rateStr.c_str());
-    gtk_label_set_text(GTK_LABEL(g_histWin.rateSubLabel), rateSub.c_str());
-
-    // 3. Estimated Remaining Time Card
     std::wstring etaValue, etaDetails;
     const char* etaClass = "bh-card-value-blue";
     switch (forecast.state) {
@@ -369,22 +431,19 @@ void RefreshHistorySummaryAndChart() {
         case battery_history::RuntimeState::Stale:
             etaValue = T(L"No recent readings");
             etaDetails = T(L"Connect the device to resume forecasting.");
-            etaClass = "bh-card-value";
             break;
         case battery_history::RuntimeState::Flat:
             etaValue = T(L"Insufficient decline");
             etaDetails = T(L"A measurable discharge trend is required.");
-            etaClass = "bh-card-value";
             break;
         default:
             etaValue = T(L"Collecting data");
             etaDetails = T(L"Requires 4 readings, 2 hours and 3 percentage points of decline.");
-            etaClass = "bh-card-value";
             break;
     }
     SetValueLabelClass(g_histWin.etaValueLabel, etaClass);
     gtk_label_set_text(GTK_LABEL(g_histWin.etaValueLabel), WideToUtf8(etaValue).c_str());
-    gtk_label_set_text(GTK_LABEL(g_histWin.etaSubLabel), WideToUtf8(etaDetails).c_str());
+    gtk_label_set_text(GTK_LABEL(g_histWin.etaDetailsLabel), WideToUtf8(etaDetails).c_str());
 
     if (g_histWin.drawingArea) {
         gtk_widget_queue_draw(g_histWin.drawingArea);
@@ -404,9 +463,11 @@ void PopulateDeviceCombo() {
             g_histWin.deviceKeys.push_back(d.key);
         }
     }
-    for (const auto& s : g_store.samples) {
-        if (!s.key.empty() && seen.insert(s.key).second) {
-            g_histWin.deviceKeys.push_back(s.key);
+    if (!g_histWin.demo) {
+        for (const auto& s : g_store.samples) {
+            if (!s.key.empty() && seen.insert(s.key).second) {
+                g_histWin.deviceKeys.push_back(s.key);
+            }
         }
     }
 
@@ -431,19 +492,10 @@ void PopulateDeviceCombo() {
     g_histWin.updatingCombo = false;
 }
 
-void DrawRoundedRect(cairo_t* cr, double x, double y, double w, double h, double r) {
-    cairo_new_sub_path(cr);
-    cairo_arc(cr, x + w - r, y + r, r, -M_PI / 2, 0);
-    cairo_arc(cr, x + w - r, y + h - r, r, 0, M_PI / 2);
-    cairo_arc(cr, x + r, y + h - r, r, M_PI / 2, M_PI);
-    cairo_arc(cr, x + r, y + r, r, M_PI, 3 * M_PI / 2);
-    cairo_close_path(cr);
-}
-
 void DrawHistoryChart(GtkDrawingArea*, cairo_t* cr, int width, int height, gpointer) {
-    if (width <= 40 || height <= 40) return;
+    if (width <= 120 || height <= 120) return;
 
-    // Outer card background
+    // Outer panel matching Windows RoundedPanel(dc, panel, P().panel, P().border, 14)
     DrawRoundedRect(cr, 1.0, 1.0, width - 2.0, height - 2.0, 14.0);
     cairo_set_source_rgb(cr, 22.0 / 255.0, 30.0 / 255.0, 45.0 / 255.0);
     cairo_fill_preserve(cr);
@@ -451,24 +503,24 @@ void DrawHistoryChart(GtkDrawingArea*, cairo_t* cr, int width, int height, gpoin
     cairo_set_line_width(cr, 1.0);
     cairo_stroke(cr);
 
-    // Legend caption at top of chart card
+    // Legend caption at top of chart panel
     cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(cr, 12.0);
+    cairo_set_font_size(cr, 13.0);
     cairo_set_source_rgb(cr, 165.0 / 255.0, 182.0 / 255.0, 202.0 / 255.0);
     std::string legend = WideToUtf8(T(L"Blue: recorded battery; green: measured increase"));
-    cairo_move_to(cr, 18.0, 24.0);
+    cairo_move_to(cr, 18.0, 28.0);
     cairo_show_text(cr, legend.c_str());
 
-    const double plotLeft = 64.0;
-    const double plotTop = 40.0;
-    const double plotRight = width - 24.0;
-    const double plotBottom = height - 48.0;
+    const double plotLeft = 78.0;
+    const double plotTop = 50.0;
+    const double plotRight = width - 21.0;
+    const double plotBottom = height - 61.0;
     const double plotW = plotRight - plotLeft;
     const double plotH = plotBottom - plotTop;
-    if (plotW <= 60.0 || plotH <= 40.0) return;
+    if (plotW <= 120.0 || plotH <= 68.0) return;
 
-    // Inner chart area
-    DrawRoundedRect(cr, plotLeft, plotTop, plotW, plotH, 8.0);
+    // Inner chart area matching Windows RoundedPanel(dc, plot, P().chart, P().chart, 6)
+    DrawRoundedRect(cr, plotLeft, plotTop, plotW, plotH, 6.0);
     cairo_set_source_rgb(cr, 15.0 / 255.0, 23.0 / 255.0, 37.0 / 255.0);
     cairo_fill(cr);
 
@@ -498,22 +550,11 @@ void DrawHistoryChart(GtkDrawingArea*, cairo_t* cr, int width, int height, gpoin
     const int64_t now = UtcNow();
     const int64_t span = static_cast<int64_t>(g_histWin.days) * kSecondsPerDay;
     const int64_t since = now - span;
-    const auto points = g_histWin.selectedKey.empty()
-        ? std::vector<battery_history::Sample>{}
-        : g_store.For(g_histWin.selectedKey, since, now);
+    const auto points = VisibleHistorySamples(now);
 
-    // Determine base line color from brand accent if available, fallback to blue (#5ba6ff)
-    DeviceStatus dev = FindDeviceStatus(g_histWin.selectedKey);
-    Accent accent = BrandOf(dev);
-    double baseR = 91.0 / 255.0, baseG = 166.0 / 255.0, baseB = 255.0 / 255.0;
-    if (accent != Accent::None) {
-        BrandColor bc = AccentColor(accent, false);
-        baseR = bc.r / 255.0;
-        baseG = bc.g / 255.0;
-        baseB = bc.b / 255.0;
-    }
-    const double chargeR = 59.0 / 255.0, chargeG = 215.0 / 255.0, chargeB = 158.0 / 255.0;
-    const double lowR = 255.0 / 255.0, lowG = 82.0 / 255.0, lowB = 99.0 / 255.0;
+    const double blueR = 91.0 / 255.0, blueG = 166.0 / 255.0, blueB = 255.0 / 255.0;
+    const double greenR = 59.0 / 255.0, greenG = 215.0 / 255.0, greenB = 158.0 / 255.0;
+    const double redR = 255.0 / 255.0, redG = 132.0 / 255.0, redB = 147.0 / 255.0;
 
     if (!points.empty()) {
         struct Pt {
@@ -538,7 +579,7 @@ void DrawHistoryChart(GtkDrawingArea*, cairo_t* cr, int width, int height, gpoin
             });
         }
 
-        // Draw translucent gradient fill under contiguous curve segments
+        // Translucent gradient fill under contiguous curve segments
         size_t segStart = 0;
         while (segStart < coords.size()) {
             size_t segEnd = segStart;
@@ -563,15 +604,9 @@ void DrawHistoryChart(GtkDrawingArea*, cairo_t* cr, int width, int height, gpoin
                 cairo_line_to(cr, coords[segEnd].x, plotBottom);
                 cairo_close_path(cr);
 
-                bool segCharging = coords[segEnd].charging;
-                bool segLow = !segCharging && coords[segEnd].percent <= 15;
-                double fillR = segCharging ? chargeR : (segLow ? lowR : baseR);
-                double fillG = segCharging ? chargeG : (segLow ? lowG : baseG);
-                double fillB = segCharging ? chargeB : (segLow ? lowB : baseB);
-
                 cairo_pattern_t* grad = cairo_pattern_create_linear(0, plotTop, 0, plotBottom);
-                cairo_pattern_add_color_stop_rgba(grad, 0.0, fillR, fillG, fillB, 0.30);
-                cairo_pattern_add_color_stop_rgba(grad, 1.0, fillR, fillG, fillB, 0.02);
+                cairo_pattern_add_color_stop_rgba(grad, 0.0, blueR, blueG, blueB, 0.22);
+                cairo_pattern_add_color_stop_rgba(grad, 1.0, blueR, blueG, blueB, 0.01);
                 cairo_set_source(cr, grad);
                 cairo_fill(cr);
                 cairo_pattern_destroy(grad);
@@ -580,8 +615,8 @@ void DrawHistoryChart(GtkDrawingArea*, cairo_t* cr, int width, int height, gpoin
             segStart = segEnd + 1;
         }
 
-        // Draw smooth line segments and data points
-        cairo_set_line_width(cr, 2.4);
+        // Line segments and markers matching Windows Paint() lines 404-441
+        cairo_set_line_width(cr, 2.0);
         cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
         cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
 
@@ -594,28 +629,25 @@ void DrawHistoryChart(GtkDrawingArea*, cairo_t* cr, int width, int height, gpoin
                 joined = curr.timestamp > prev.timestamp &&
                          curr.timestamp - prev.timestamp <= kMaxConnectedGap &&
                          std::abs(curr.percent - prev.percent) <= 25;
-                rising = joined && (curr.percent > prev.percent || curr.charging);
+                rising = joined && curr.percent > prev.percent;
             }
             bool isLow = !curr.charging && !rising && curr.percent <= 15;
-            double r = (curr.charging || rising) ? chargeR : (isLow ? lowR : baseR);
-            double g = (curr.charging || rising) ? chargeG : (isLow ? lowG : baseG);
-            double b = (curr.charging || rising) ? chargeB : (isLow ? lowB : baseB);
+            double r = rising ? greenR : (isLow ? redR : blueR);
+            double g = rising ? greenG : (isLow ? redG : blueG);
+            double b = rising ? greenB : (isLow ? redB : blueB);
 
             if (joined) {
                 const auto& prev = coords[i - 1];
-                cairo_set_source_rgb(cr, r, g, b);
+                cairo_set_source_rgb(cr, rising ? greenR : blueR,
+                                     rising ? greenG : blueG,
+                                     rising ? greenB : blueB);
                 cairo_move_to(cr, prev.x, prev.y);
                 cairo_line_to(cr, curr.x, curr.y);
                 cairo_stroke(cr);
             }
 
             if (i + 1 == coords.size() || coords.size() <= 70 || i % 10 == 0) {
-                double radius = (i + 1 == coords.size()) ? 4.5 : 2.5;
-                if (i + 1 == coords.size()) {
-                    cairo_set_source_rgba(cr, r, g, b, 0.28);
-                    cairo_arc(cr, curr.x, curr.y, 8.0, 0, 2 * M_PI);
-                    cairo_fill(cr);
-                }
+                double radius = (i + 1 == coords.size()) ? 4.0 : 2.0;
                 cairo_set_source_rgb(cr, r, g, b);
                 cairo_arc(cr, curr.x, curr.y, radius, 0, 2 * M_PI);
                 cairo_fill(cr);
@@ -630,7 +662,7 @@ void DrawHistoryChart(GtkDrawingArea*, cairo_t* cr, int width, int height, gpoin
         cairo_show_text(cr, emptyMsg.c_str());
     }
 
-    // X-axis time labels
+    // X-axis time labels & disclaimer note matching Windows lines 447-455
     std::wstring startW = g_histWin.days == 1
         ? std::wstring(T(L"24h ago"))
         : TF(L"{days} days ago", { { L"days", std::to_wstring(g_histWin.days) } });
@@ -639,17 +671,17 @@ void DrawHistoryChart(GtkDrawingArea*, cairo_t* cr, int width, int height, gpoin
     std::string footerNote = WideToUtf8(T(L"Trend estimates are approximate; missing samples are not inferred."));
 
     cairo_set_source_rgb(cr, 165.0 / 255.0, 182.0 / 255.0, 202.0 / 255.0);
-    cairo_move_to(cr, plotLeft, plotBottom + 18.0);
+    cairo_move_to(cr, plotLeft, plotBottom + 20.0);
     cairo_show_text(cr, startLabel.c_str());
 
     cairo_text_extents_t nowExt{};
     cairo_text_extents(cr, nowLabel.c_str(), &nowExt);
-    cairo_move_to(cr, plotRight - nowExt.width, plotBottom + 18.0);
+    cairo_move_to(cr, plotRight - nowExt.width, plotBottom + 20.0);
     cairo_show_text(cr, nowLabel.c_str());
 
     cairo_text_extents_t noteExt{};
     cairo_text_extents(cr, footerNote.c_str(), &noteExt);
-    cairo_move_to(cr, plotLeft + (plotW - noteExt.width) / 2.0, plotBottom + 36.0);
+    cairo_move_to(cr, plotLeft + (plotW - noteExt.width) / 2.0, plotBottom + 44.0);
     cairo_show_text(cr, footerNote.c_str());
 }
 
@@ -678,7 +710,7 @@ void OnRange30d(GtkButton*, gpointer) {
 }
 
 void OnClearHistory(GtkButton*, gpointer) {
-    if (g_histWin.selectedKey.empty()) return;
+    if (g_histWin.demo || g_histWin.selectedKey.empty()) return;
     g_store.Clear(g_histWin.selectedKey);
     SaveHistoryFile();
     RefreshHistorySummaryAndChart();
@@ -691,23 +723,26 @@ void OnHistoryWindowDestroy(GtkWidget*, gpointer) {
     g_histWin.btn7d = nullptr;
     g_histWin.btn30d = nullptr;
     g_histWin.btnClear = nullptr;
-    g_histWin.levelValueLabel = nullptr;
-    g_histWin.levelSubLabel = nullptr;
-    g_histWin.rateValueLabel = nullptr;
-    g_histWin.rateSubLabel = nullptr;
+    g_histWin.headlineLabel = nullptr;
+    g_histWin.demoSubtitleLabel = nullptr;
+    for (int i = 0; i < 5; ++i) {
+        g_histWin.statTitleLabels[i] = nullptr;
+        g_histWin.statValueLabels[i] = nullptr;
+    }
+    g_histWin.etaTitleLabel = nullptr;
     g_histWin.etaValueLabel = nullptr;
-    g_histWin.etaSubLabel = nullptr;
+    g_histWin.etaDetailsLabel = nullptr;
     g_histWin.drawingArea = nullptr;
 }
 
-GtkWidget* CreateSummaryCard(const std::string& titleText,
-                             GtkWidget** outValueLabel,
-                             GtkWidget** outSubLabel) {
+GtkWidget* CreateStatCard(const std::string& headingText,
+                          GtkWidget** outTitleLabel,
+                          GtkWidget** outValueLabel) {
     GtkWidget* card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
     gtk_widget_add_css_class(card, "bh-card");
     gtk_widget_set_hexpand(card, TRUE);
 
-    GtkWidget* title = gtk_label_new(titleText.c_str());
+    GtkWidget* title = gtk_label_new(headingText.c_str());
     gtk_widget_add_css_class(title, "bh-card-label");
     gtk_widget_set_halign(title, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(card), title);
@@ -718,14 +753,8 @@ GtkWidget* CreateSummaryCard(const std::string& titleText,
     gtk_label_set_ellipsize(GTK_LABEL(value), PANGO_ELLIPSIZE_END);
     gtk_box_append(GTK_BOX(card), value);
 
-    GtkWidget* sub = gtk_label_new("");
-    gtk_widget_add_css_class(sub, "bh-card-sub");
-    gtk_widget_set_halign(sub, GTK_ALIGN_START);
-    gtk_label_set_ellipsize(GTK_LABEL(sub), PANGO_ELLIPSIZE_END);
-    gtk_box_append(GTK_BOX(card), sub);
-
+    if (outTitleLabel) *outTitleLabel = title;
     if (outValueLabel) *outValueLabel = value;
-    if (outSubLabel) *outSubLabel = sub;
     return card;
 }
 
@@ -776,6 +805,271 @@ void OnRenameDestroy(GtkWidget*, gpointer userData) {
     delete static_cast<RenameDialogData*>(userData);
 }
 
+// ---- Request Support / Report Window State (src/report.cpp parity) ----------------------------
+
+struct ReportWindowData {
+    GtkWidget* window = nullptr;
+    GtkWidget* statusLabel = nullptr;
+    std::string reportText;
+};
+
+ReportWindowData* g_reportWin = nullptr;
+
+void OnReportCopy(GtkButton*, gpointer userData) {
+    auto* data = static_cast<ReportWindowData*>(userData);
+    if (!data) return;
+    GdkDisplay* display = gdk_display_get_default();
+    if (display) {
+        GdkClipboard* clipboard = gdk_display_get_clipboard(display);
+        if (clipboard) {
+            gdk_clipboard_set_text(clipboard, data->reportText.c_str());
+        }
+    }
+    if (data->statusLabel) {
+        gtk_label_set_text(
+            GTK_LABEL(data->statusLabel),
+            WideToUtf8(T(L"The full report is copied. Paste it into a GitHub issue if we ask for more details.")).c_str());
+        gtk_widget_set_visible(data->statusLabel, TRUE);
+    }
+}
+
+void OnReportOpenGitHub(GtkButton*, gpointer) {
+    OpenUrlWithXdgOpen("https://github.com/krisgfx9/Wireless-Device-Battery-Monitor/issues");
+}
+
+void OnReportClose(GtkButton*, gpointer userData) {
+    auto* data = static_cast<ReportWindowData*>(userData);
+    if (data && data->window) {
+        gtk_window_destroy(GTK_WINDOW(data->window));
+    }
+}
+
+void OnReportDestroy(GtkWidget*, gpointer userData) {
+    auto* data = static_cast<ReportWindowData*>(userData);
+    if (g_reportWin == data) g_reportWin = nullptr;
+    delete data;
+}
+
+// ---- Floating Taskbar/Desktop Widget Window (src/widget.cpp parity) ---------------------------
+
+struct WidgetWindowState {
+    GtkApplication* app = nullptr;
+    GtkWidget* window = nullptr;
+    GtkWidget* drawingArea = nullptr;
+    std::vector<DeviceStatus> devices;
+    aliases::AliasMap aliasesMap;
+    std::vector<std::wstring> shortLabels;
+    bool useBrandAccents = false;
+    bool widgetBackground = false;
+    bool stacked = false;
+    bool demo = false;
+};
+
+WidgetWindowState g_widgetWin;
+
+void DrawDeviceKindIcon(cairo_t* cr, DeviceKind kind, double cx, double cy, double size,
+                        double r, double g, double b, double alpha) {
+    cairo_save(cr);
+    cairo_set_source_rgba(cr, r, g, b, alpha);
+    cairo_set_line_width(cr, 1.8);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+
+    const double half = size * 0.5;
+    switch (kind) {
+        case DeviceKind::Mouse: {
+            double w = size * 0.62, h = size * 0.90;
+            DrawRoundedRect(cr, cx - w * 0.5, cy - h * 0.5, w, h, w * 0.45);
+            cairo_stroke(cr);
+            cairo_move_to(cr, cx, cy - h * 0.30);
+            cairo_line_to(cr, cx, cy - h * 0.08);
+            cairo_stroke(cr);
+            break;
+        }
+        case DeviceKind::Keyboard: {
+            double w = size * 0.96, h = size * 0.62;
+            DrawRoundedRect(cr, cx - w * 0.5, cy - h * 0.5, w, h, 3.0);
+            cairo_stroke(cr);
+            for (int row = 0; row < 2; ++row) {
+                for (int col = -1; col <= 1; ++col) {
+                    cairo_arc(cr, cx + col * (w * 0.24), cy - h * 0.14 + row * (h * 0.24), 1.1, 0, 2 * M_PI);
+                    cairo_fill(cr);
+                }
+            }
+            break;
+        }
+        case DeviceKind::Headset: {
+            double rad = size * 0.38;
+            cairo_arc(cr, cx, cy - 1.0, rad, M_PI, 2 * M_PI);
+            cairo_stroke(cr);
+            DrawRoundedRect(cr, cx - rad - 2.0, cy - 2.0, 4.0, size * 0.36, 1.5);
+            cairo_fill(cr);
+            DrawRoundedRect(cr, cx + rad - 2.0, cy - 2.0, 4.0, size * 0.36, 1.5);
+            cairo_fill(cr);
+            break;
+        }
+        case DeviceKind::Gamepad: {
+            double w = size * 0.94, h = size * 0.62;
+            DrawRoundedRect(cr, cx - w * 0.5, cy - h * 0.5, w, h, h * 0.4);
+            cairo_stroke(cr);
+            cairo_move_to(cr, cx - w * 0.22 - 2.5, cy);
+            cairo_line_to(cr, cx - w * 0.22 + 2.5, cy);
+            cairo_move_to(cr, cx - w * 0.22, cy - 2.5);
+            cairo_line_to(cr, cx - w * 0.22, cy + 2.5);
+            cairo_stroke(cr);
+            cairo_arc(cr, cx + w * 0.22, cy - 1.5, 1.4, 0, 2 * M_PI);
+            cairo_fill(cr);
+            cairo_arc(cr, cx + w * 0.14, cy + 1.5, 1.4, 0, 2 * M_PI);
+            cairo_fill(cr);
+            break;
+        }
+        case DeviceKind::Phone: {
+            double w = size * 0.56, h = size * 0.92;
+            DrawRoundedRect(cr, cx - w * 0.5, cy - h * 0.5, w, h, 3.0);
+            cairo_stroke(cr);
+            cairo_arc(cr, cx, cy + h * 0.32, 1.2, 0, 2 * M_PI);
+            cairo_fill(cr);
+            break;
+        }
+        default: {
+            double w = size * 0.78, h = size * 0.48;
+            DrawRoundedRect(cr, cx - w * 0.5, cy - h * 0.5, w, h, 2.5);
+            cairo_stroke(cr);
+            cairo_rectangle(cr, cx + w * 0.5, cy - h * 0.22, 2.2, h * 0.44);
+            cairo_fill(cr);
+            (void)half;
+            break;
+        }
+    }
+    cairo_restore(cr);
+}
+
+void DrawWidgetStrip(GtkDrawingArea*, cairo_t* cr, int width, int height, gpointer) {
+    if (width <= 10 || height <= 10) return;
+
+    // Outer pill background
+    double bgAlpha = g_widgetWin.widgetBackground ? 0.96 : 0.80;
+    DrawRoundedRect(cr, 1.0, 1.0, width - 2.0, height - 2.0, 10.0);
+    cairo_set_source_rgba(cr, 18.0 / 255.0, 25.0 / 255.0, 38.0 / 255.0, bgAlpha);
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgba(cr, 47.0 / 255.0, 63.0 / 255.0, 83.0 / 255.0, 0.9);
+    cairo_set_line_width(cr, 1.0);
+    cairo_stroke(cr);
+
+    if (g_widgetWin.devices.empty()) {
+        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+        cairo_set_font_size(cr, 12.0);
+        cairo_set_source_rgb(cr, 165.0 / 255.0, 182.0 / 255.0, 202.0 / 255.0);
+        std::string msg = "BatteryHub";
+        cairo_text_extents_t ext{};
+        cairo_text_extents(cr, msg.c_str(), &ext);
+        cairo_move_to(cr, (width - ext.width) * 0.5, (height + ext.height) * 0.5);
+        cairo_show_text(cr, msg.c_str());
+        return;
+    }
+
+    const size_t n = g_widgetWin.devices.size();
+    const double cellW = static_cast<double>(width - 12) / static_cast<double>(n);
+
+    for (size_t i = 0; i < n; ++i) {
+        const auto& s = g_widgetWin.devices[i];
+        const double cellX = 6.0 + i * cellW;
+        const bool offline = !s.connected;
+        const bool dim = offline || s.percent < 0 || s.asleep;
+        const double alpha = dim ? 0.55 : 1.0;
+        const bool isLow = !offline && !s.charging && s.percent >= 0 && s.percent <= 15;
+        const bool isFull = !offline && (s.full || (s.charging && s.percent >= 100));
+        const bool isCharging = !offline && !s.asleep && s.charging && !isFull;
+
+        Accent accent = g_widgetWin.useBrandAccents ? BrandOf(s) : Accent::None;
+        BrandColor bc = AccentColor(accent, false);
+        double iconR = 232.0 / 255.0, iconG = 240.0 / 255.0, iconB = 252.0 / 255.0;
+        if (accent != Accent::None) {
+            iconR = bc.r / 255.0;
+            iconG = bc.g / 255.0;
+            iconB = bc.b / 255.0;
+        }
+
+        double barR = isCharging ? 0.0 : (isLow ? 0.92 : (accent != Accent::None ? iconR : 0.12));
+        double barG = isCharging ? 0.67 : (isLow ? 0.20 : (accent != Accent::None ? iconG : 0.75));
+        double barB = isCharging ? 1.0 : (isLow ? 0.24 : (accent != Accent::None ? iconB : 0.35));
+
+        std::string pctText;
+        if (offline) pctText = "×";
+        else if (!s.levelText.empty() && s.percent >= 0) pctText = WideToUtf8(T(s.levelText));
+        else if (s.percent >= 0) pctText = std::to_string(s.percent) + "%";
+        else pctText = "?";
+        if (isFull) pctText += " ✓";
+        else if (isCharging) pctText += " ⚡";
+
+        double iconCx = g_widgetWin.stacked ? (cellX + cellW * 0.5) : (cellX + 16.0);
+        double iconCy = g_widgetWin.stacked ? 15.0 : (height * 0.45);
+
+        if (accent != Accent::None) {
+            cairo_pattern_t* glow = cairo_pattern_create_radial(iconCx, iconCy, 1.0, iconCx, iconCy, 13.0);
+            cairo_pattern_add_color_stop_rgba(glow, 0.0, iconR, iconG, iconB, 0.32 * alpha);
+            cairo_pattern_add_color_stop_rgba(glow, 1.0, iconR, iconG, iconB, 0.0);
+            cairo_set_source(cr, glow);
+            cairo_arc(cr, iconCx, iconCy, 13.0, 0, 2 * M_PI);
+            cairo_fill(cr);
+            cairo_pattern_destroy(glow);
+        }
+
+        DrawDeviceKindIcon(cr, s.kind, iconCx, iconCy, 16.0, iconR, iconG, iconB, alpha);
+
+        // Short disambiguation label when multiple devices of the same kind are shown
+        if (i < g_widgetWin.shortLabels.size() && !g_widgetWin.shortLabels[i].empty()) {
+            std::string shortLbl = WideToUtf8(g_widgetWin.shortLabels[i]);
+            cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+            cairo_set_font_size(cr, 8.5);
+            cairo_set_source_rgba(cr, 165.0 / 255.0, 182.0 / 255.0, 202.0 / 255.0, alpha);
+            cairo_move_to(cr, iconCx + 8.0, iconCy - 4.0);
+            cairo_show_text(cr, shortLbl.c_str());
+        }
+
+        // Percentage text
+        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+        cairo_set_font_size(cr, g_widgetWin.stacked ? 11.5 : 13.0);
+        if (isLow) cairo_set_source_rgba(cr, 0.95, 0.25, 0.28, alpha);
+        else cairo_set_source_rgba(cr, 232.0 / 255.0, 240.0 / 255.0, 252.0 / 255.0, alpha);
+
+        cairo_text_extents_t ext{};
+        cairo_text_extents(cr, pctText.c_str(), &ext);
+        if (g_widgetWin.stacked) {
+            cairo_move_to(cr, cellX + (cellW - ext.width) * 0.5, height - 10.0);
+        } else {
+            cairo_move_to(cr, cellX + 30.0, height * 0.45 + ext.height * 0.45);
+        }
+        cairo_show_text(cr, pctText.c_str());
+
+        // Level bar underneath
+        double barX = cellX + 6.0;
+        double barW = std::max(16.0, cellW - 12.0);
+        double barY = height - 5.0;
+        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.18);
+        cairo_rectangle(cr, barX, barY, barW, 3.0);
+        cairo_fill(cr);
+
+        if (!offline && s.percent >= 0) {
+            double fillW = std::max(2.0, (barW * std::min(100, s.percent)) / 100.0);
+            cairo_set_source_rgba(cr, barR, barG, barB, alpha);
+            cairo_rectangle(cr, barX, barY, fillW, 3.0);
+            cairo_fill(cr);
+        }
+    }
+}
+
+void OnWidgetClicked(GtkGestureClick*, gint, gdouble, gdouble, gpointer) {
+    std::wstring key = g_widgetWin.devices.empty() ? std::wstring() : g_widgetWin.devices.front().key;
+    ShowLinuxBatteryHistoryWindow(
+        g_widgetWin.app, g_widgetWin.devices, g_widgetWin.aliasesMap, key, g_widgetWin.demo);
+}
+
+void OnWidgetDestroy(GtkWidget*, gpointer) {
+    g_widgetWin.window = nullptr;
+    g_widgetWin.drawingArea = nullptr;
+}
+
 }  // namespace
 
 void RecordLinuxBatteryHistory(const std::vector<DeviceStatus>& devices) {
@@ -792,12 +1086,19 @@ void RecordLinuxBatteryHistory(const std::vector<DeviceStatus>& devices) {
 
 void ShowLinuxBatteryHistoryWindow(GtkApplication* app,
                                    const std::vector<DeviceStatus>& currentDevices,
-                                   const aliases::AliasMap& aliasesMap) {
+                                   const aliases::AliasMap& aliasesMap,
+                                   const std::wstring& initialKey,
+                                   bool demo) {
     EnsureLoaded();
     InstallDarkCss();
 
+    g_histWin.app = app;
     g_histWin.currentDevices = currentDevices;
     g_histWin.aliasesMap = aliasesMap;
+    g_histWin.demo = demo;
+    if (!initialKey.empty()) {
+        g_histWin.selectedKey = initialKey;
+    }
 
     if (g_histWin.window) {
         PopulateDeviceCombo();
@@ -809,68 +1110,107 @@ void ShowLinuxBatteryHistoryWindow(GtkApplication* app,
     GtkWidget* win = app ? gtk_application_window_new(app) : gtk_window_new();
     g_histWin.window = win;
     gtk_widget_add_css_class(win, "batteryhub-window");
-    gtk_window_set_title(GTK_WINDOW(win), "BatteryHub — Battery History & Insights");
-    gtk_window_set_default_size(GTK_WINDOW(win), 960, 640);
+    gtk_window_set_default_size(GTK_WINDOW(win), 1020, 710);
+    gtk_widget_set_size_request(win, 880, 620);
 
-    GtkWidget* root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16);
-    gtk_widget_set_margin_top(root, 20);
-    gtk_widget_set_margin_bottom(root, 20);
-    gtk_widget_set_margin_start(root, 22);
-    gtk_widget_set_margin_end(root, 22);
+    GtkWidget* root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 14);
+    gtk_widget_set_margin_top(root, 18);
+    gtk_widget_set_margin_bottom(root, 22);
+    gtk_widget_set_margin_start(root, 24);
+    gtk_widget_set_margin_end(root, 24);
     gtk_window_set_child(GTK_WINDOW(win), root);
 
-    // Top bar: title + device selector + range buttons + clear button
+    // Top button bar: Left (Last 24 hours, Last 7 days, Last 30 days), Right (Device selector + Clear device history)
     GtkWidget* topBar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
     gtk_box_append(GTK_BOX(root), topBar);
 
-    GtkWidget* titleLabel = gtk_label_new(WideToUtf8(T(L"Battery history")).c_str());
-    gtk_widget_add_css_class(titleLabel, "bh-title");
-    gtk_widget_set_margin_end(titleLabel, 12);
-    gtk_box_append(GTK_BOX(topBar), titleLabel);
-
-    g_histWin.combo = gtk_combo_box_text_new();
-    gtk_widget_set_hexpand(g_histWin.combo, TRUE);
-    g_signal_connect(g_histWin.combo, "changed", G_CALLBACK(OnDeviceComboChanged), nullptr);
-    gtk_box_append(GTK_BOX(topBar), g_histWin.combo);
-
-    g_histWin.btn24h = gtk_button_new_with_label("24h");
-    g_histWin.btn7d = gtk_button_new_with_label("7d");
-    g_histWin.btn30d = gtk_button_new_with_label("30d");
-    g_histWin.btnClear = gtk_button_new_with_label(WideToUtf8(T(L"Clear device history")).c_str());
-    gtk_widget_add_css_class(g_histWin.btnClear, "bh-btn-danger");
+    g_histWin.btn24h = gtk_button_new_with_label(WideToUtf8(T(L"Last 24 hours")).c_str());
+    g_histWin.btn7d = gtk_button_new_with_label(WideToUtf8(T(L"Last 7 days")).c_str());
+    g_histWin.btn30d = gtk_button_new_with_label(WideToUtf8(T(L"Last 30 days")).c_str());
 
     g_signal_connect(g_histWin.btn24h, "clicked", G_CALLBACK(OnRange24h), nullptr);
     g_signal_connect(g_histWin.btn7d, "clicked", G_CALLBACK(OnRange7d), nullptr);
     g_signal_connect(g_histWin.btn30d, "clicked", G_CALLBACK(OnRange30d), nullptr);
-    g_signal_connect(g_histWin.btnClear, "clicked", G_CALLBACK(OnClearHistory), nullptr);
 
     gtk_box_append(GTK_BOX(topBar), g_histWin.btn24h);
     gtk_box_append(GTK_BOX(topBar), g_histWin.btn7d);
     gtk_box_append(GTK_BOX(topBar), g_histWin.btn30d);
+
+    GtkWidget* spacer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_hexpand(spacer, TRUE);
+    gtk_box_append(GTK_BOX(topBar), spacer);
+
+    g_histWin.combo = gtk_combo_box_text_new();
+    g_signal_connect(g_histWin.combo, "changed", G_CALLBACK(OnDeviceComboChanged), nullptr);
+    gtk_box_append(GTK_BOX(topBar), g_histWin.combo);
+
+    g_histWin.btnClear = gtk_button_new_with_label(WideToUtf8(T(L"Clear device history")).c_str());
+    gtk_widget_add_css_class(g_histWin.btnClear, "bh-btn-danger");
+    g_signal_connect(g_histWin.btnClear, "clicked", G_CALLBACK(OnClearHistory), nullptr);
     gtk_box_append(GTK_BOX(topBar), g_histWin.btnClear);
 
-    // Summary cards row: Current Level, Discharge Rate, Estimated Remaining Time
-    GtkWidget* cardsRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    gtk_box_set_homogeneous(GTK_BOX(cardsRow), TRUE);
-    gtk_box_append(GTK_BOX(root), cardsRow);
+    // Headline row + optional Demo subtitle row (matching src/battery_history.cpp lines 302-309)
+    GtkWidget* headerBox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    gtk_box_append(GTK_BOX(root), headerBox);
 
-    GtkWidget* levelCard = CreateSummaryCard(
-        WideToUtf8(T(L"Latest")), &g_histWin.levelValueLabel, &g_histWin.levelSubLabel);
-    GtkWidget* rateCard = CreateSummaryCard(
-        "Discharge Rate (%/h)", &g_histWin.rateValueLabel, &g_histWin.rateSubLabel);
-    GtkWidget* etaCard = CreateSummaryCard(
-        WideToUtf8(T(L"Estimated time to empty")), &g_histWin.etaValueLabel, &g_histWin.etaSubLabel);
+    g_histWin.headlineLabel = gtk_label_new("");
+    gtk_widget_add_css_class(g_histWin.headlineLabel, "bh-headline");
+    gtk_widget_set_halign(g_histWin.headlineLabel, GTK_ALIGN_START);
+    gtk_label_set_ellipsize(GTK_LABEL(g_histWin.headlineLabel), PANGO_ELLIPSIZE_END);
+    gtk_box_append(GTK_BOX(headerBox), g_histWin.headlineLabel);
 
-    gtk_box_append(GTK_BOX(cardsRow), levelCard);
-    gtk_box_append(GTK_BOX(cardsRow), rateCard);
-    gtk_box_append(GTK_BOX(cardsRow), etaCard);
+    g_histWin.demoSubtitleLabel = gtk_label_new(WideToUtf8(T(L"Demo readings (not saved)")).c_str());
+    gtk_widget_add_css_class(g_histWin.demoSubtitleLabel, "bh-subtitle");
+    gtk_widget_set_halign(g_histWin.demoSubtitleLabel, GTK_ALIGN_START);
+    gtk_widget_set_visible(g_histWin.demoSubtitleLabel, demo ? TRUE : FALSE);
+    gtk_box_append(GTK_BOX(headerBox), g_histWin.demoSubtitleLabel);
 
-    // Cairo chart drawing area
+    // Row 1 — 5 Equal Statistic Cards: Latest, Lowest, Highest, Change, Readings
+    GtkWidget* statsRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    gtk_box_set_homogeneous(GTK_BOX(statsRow), TRUE);
+    gtk_box_append(GTK_BOX(root), statsRow);
+
+    const wchar_t* headings[5] = { L"Latest", L"Lowest", L"Highest", L"Change", L"Readings" };
+    for (int i = 0; i < 5; ++i) {
+        GtkWidget* card = CreateStatCard(
+            WideToUtf8(T(headings[i])), &g_histWin.statTitleLabels[i], &g_histWin.statValueLabels[i]);
+        gtk_box_append(GTK_BOX(statsRow), card);
+    }
+
+    // Row 2 — Full-Width "Estimated time to empty" Card (matching src/battery_history.cpp lines 335-375)
+    GtkWidget* etaCard = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_widget_add_css_class(etaCard, "bh-card");
+    gtk_box_append(GTK_BOX(root), etaCard);
+
+    g_histWin.etaTitleLabel = gtk_label_new(WideToUtf8(T(L"Estimated time to empty")).c_str());
+    gtk_widget_add_css_class(g_histWin.etaTitleLabel, "bh-card-label");
+    gtk_widget_set_halign(g_histWin.etaTitleLabel, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(etaCard), g_histWin.etaTitleLabel);
+
+    GtkWidget* etaBottomRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 16);
+    gtk_box_append(GTK_BOX(etaCard), etaBottomRow);
+
+    g_histWin.etaValueLabel = gtk_label_new("—");
+    gtk_widget_add_css_class(g_histWin.etaValueLabel, "bh-card-value-blue");
+    gtk_widget_set_halign(g_histWin.etaValueLabel, GTK_ALIGN_START);
+    gtk_widget_set_hexpand(g_histWin.etaValueLabel, TRUE);
+    gtk_label_set_ellipsize(GTK_LABEL(g_histWin.etaValueLabel), PANGO_ELLIPSIZE_END);
+    gtk_box_append(GTK_BOX(etaBottomRow), g_histWin.etaValueLabel);
+
+    g_histWin.etaDetailsLabel = gtk_label_new("");
+    gtk_widget_add_css_class(g_histWin.etaDetailsLabel, "bh-card-sub");
+    gtk_widget_set_halign(g_histWin.etaDetailsLabel, GTK_ALIGN_START);
+    gtk_widget_set_valign(g_histWin.etaDetailsLabel, GTK_ALIGN_CENTER);
+    gtk_widget_set_hexpand(g_histWin.etaDetailsLabel, TRUE);
+    gtk_label_set_ellipsize(GTK_LABEL(g_histWin.etaDetailsLabel), PANGO_ELLIPSIZE_END);
+    gtk_box_append(GTK_BOX(etaBottomRow), g_histWin.etaDetailsLabel);
+
+    // Row 3 — Cairo Chart Panel
     g_histWin.drawingArea = gtk_drawing_area_new();
     gtk_widget_set_vexpand(g_histWin.drawingArea, TRUE);
     gtk_widget_set_hexpand(g_histWin.drawingArea, TRUE);
-    gtk_drawing_area_set_content_width(GTK_DRAWING_AREA(g_histWin.drawingArea), 880);
-    gtk_drawing_area_set_content_height(GTK_DRAWING_AREA(g_histWin.drawingArea), 380);
+    gtk_drawing_area_set_content_width(GTK_DRAWING_AREA(g_histWin.drawingArea), 830);
+    gtk_drawing_area_set_content_height(GTK_DRAWING_AREA(g_histWin.drawingArea), 340);
     gtk_drawing_area_set_draw_func(
         GTK_DRAWING_AREA(g_histWin.drawingArea), DrawHistoryChart, nullptr, nullptr);
     gtk_box_append(GTK_BOX(root), g_histWin.drawingArea);
@@ -952,4 +1292,154 @@ void ShowLinuxRenameDialog(GtkApplication* app,
     g_signal_connect(win, "destroy", G_CALLBACK(OnRenameDestroy), data);
     gtk_window_present(GTK_WINDOW(win));
     gtk_widget_grab_focus(entry);
+}
+
+void ShowLinuxReportWindow(GtkApplication* app) {
+    InstallDarkCss();
+
+    if (g_reportWin && g_reportWin->window) {
+        gtk_window_present(GTK_WINDOW(g_reportWin->window));
+        return;
+    }
+
+    auto* data = new ReportWindowData();
+    g_reportWin = data;
+    data->reportText = WideToUtf8(DumpHidCollections());
+
+    GtkWidget* win = app ? gtk_application_window_new(app) : gtk_window_new();
+    data->window = win;
+    gtk_widget_add_css_class(win, "batteryhub-window");
+    gtk_window_set_title(GTK_WINDOW(win), WideToUtf8(T(L"Request support for a device...")).c_str());
+    gtk_window_set_default_size(GTK_WINDOW(win), 720, 520);
+
+    GtkWidget* root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    gtk_widget_set_margin_top(root, 18);
+    gtk_widget_set_margin_bottom(root, 18);
+    gtk_widget_set_margin_start(root, 20);
+    gtk_widget_set_margin_end(root, 20);
+    gtk_window_set_child(GTK_WINDOW(win), root);
+
+    GtkWidget* intro = gtk_label_new(
+        WideToUtf8(T(L"This is exactly what will be sent:")).c_str());
+    gtk_widget_add_css_class(intro, "bh-card-label");
+    gtk_widget_set_halign(intro, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(root), intro);
+
+    GtkWidget* scrolled = gtk_scrolled_window_new();
+    gtk_widget_set_vexpand(scrolled, TRUE);
+    gtk_widget_set_hexpand(scrolled, TRUE);
+    gtk_box_append(GTK_BOX(root), scrolled);
+
+    GtkWidget* tv = gtk_text_view_new();
+    gtk_widget_add_css_class(tv, "bh-textview");
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(tv), FALSE);
+    gtk_text_view_set_monospace(GTK_TEXT_VIEW(tv), TRUE);
+    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(tv), GTK_WRAP_NONE);
+    GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(tv));
+    if (buf) {
+        gtk_text_buffer_set_text(buf, data->reportText.c_str(), static_cast<int>(data->reportText.size()));
+    }
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), tv);
+
+    data->statusLabel = gtk_label_new("");
+    gtk_widget_add_css_class(data->statusLabel, "bh-card-sub");
+    gtk_widget_set_halign(data->statusLabel, GTK_ALIGN_START);
+    gtk_widget_set_visible(data->statusLabel, FALSE);
+    gtk_box_append(GTK_BOX(root), data->statusLabel);
+
+    GtkWidget* btnRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    gtk_widget_set_halign(btnRow, GTK_ALIGN_END);
+    gtk_box_append(GTK_BOX(root), btnRow);
+
+    GtkWidget* btnCopy = gtk_button_new_with_label(WideToUtf8(T(L"Copy full report")).c_str());
+    gtk_widget_add_css_class(btnCopy, "bh-btn-active");
+    g_signal_connect(btnCopy, "clicked", G_CALLBACK(OnReportCopy), data);
+    gtk_box_append(GTK_BOX(btnRow), btnCopy);
+
+    GtkWidget* btnGitHub = gtk_button_new_with_label("Open GitHub issues");
+    gtk_widget_add_css_class(btnGitHub, "bh-btn");
+    g_signal_connect(btnGitHub, "clicked", G_CALLBACK(OnReportOpenGitHub), data);
+    gtk_box_append(GTK_BOX(btnRow), btnGitHub);
+
+    GtkWidget* btnClose = gtk_button_new_with_label(WideToUtf8(T(L"Close")).c_str());
+    gtk_widget_add_css_class(btnClose, "bh-btn");
+    g_signal_connect(btnClose, "clicked", G_CALLBACK(OnReportClose), data);
+    gtk_box_append(GTK_BOX(btnRow), btnClose);
+
+    g_signal_connect(win, "destroy", G_CALLBACK(OnReportDestroy), data);
+    gtk_window_present(GTK_WINDOW(win));
+}
+
+void UpdateLinuxWidgetWindow(GtkApplication* app,
+                             bool visible,
+                             const std::vector<DeviceStatus>& visibleDevices,
+                             const aliases::AliasMap& aliasesMap,
+                             bool useBrandAccents,
+                             bool widgetBackground,
+                             bool stacked,
+                             bool demo) {
+    g_widgetWin.app = app;
+    g_widgetWin.devices = visibleDevices;
+    g_widgetWin.aliasesMap = aliasesMap;
+    g_widgetWin.useBrandAccents = useBrandAccents;
+    g_widgetWin.widgetBackground = widgetBackground;
+    g_widgetWin.stacked = stacked;
+    g_widgetWin.demo = demo;
+
+    if (!visible) {
+        if (g_widgetWin.window) {
+            gtk_window_destroy(GTK_WINDOW(g_widgetWin.window));
+            g_widgetWin.window = nullptr;
+            g_widgetWin.drawingArea = nullptr;
+        }
+        return;
+    }
+
+    InstallDarkCss();
+
+    std::vector<LabelInput> labelIn;
+    labelIn.reserve(visibleDevices.size());
+    std::string tip;
+    for (const auto& d : visibleDevices) {
+        std::wstring disp = aliases::DisplayName(aliasesMap, d.key, d.name);
+        labelIn.push_back({ d.kind, disp });
+        if (!tip.empty()) tip += "\n";
+        tip += WideToUtf8(disp) + ": " + (d.percent >= 0 ? (std::to_string(d.percent) + "%") : "?");
+    }
+    g_widgetWin.shortLabels = ShortLabels(labelIn, 3);
+    if (tip.empty()) {
+        tip = "BatteryHub: " + WideToUtf8(T(L"No devices with battery info found"));
+    }
+
+    const int count = std::max<int>(1, static_cast<int>(visibleDevices.size()));
+    const int itemW = stacked ? 58 : 88;
+    const int winW = 12 + count * itemW;
+    const int winH = stacked ? 46 : 36;
+
+    if (!g_widgetWin.window) {
+        GtkWidget* win = app ? gtk_application_window_new(app) : gtk_window_new();
+        g_widgetWin.window = win;
+        gtk_widget_add_css_class(win, "batteryhub-widget");
+        gtk_window_set_title(GTK_WINDOW(win), "BatteryHub");
+        gtk_window_set_decorated(GTK_WINDOW(win), FALSE);
+        gtk_window_set_resizable(GTK_WINDOW(win), FALSE);
+
+        GtkWidget* area = gtk_drawing_area_new();
+        g_widgetWin.drawingArea = area;
+        gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(area), DrawWidgetStrip, nullptr, nullptr);
+
+        GtkGesture* click = gtk_gesture_click_new();
+        g_signal_connect(click, "pressed", G_CALLBACK(OnWidgetClicked), nullptr);
+        gtk_widget_add_controller(area, GTK_EVENT_CONTROLLER(click));
+
+        gtk_window_set_child(GTK_WINDOW(win), area);
+        g_signal_connect(win, "destroy", G_CALLBACK(OnWidgetDestroy), nullptr);
+        gtk_window_present(GTK_WINDOW(win));
+    }
+
+    gtk_drawing_area_set_content_width(GTK_DRAWING_AREA(g_widgetWin.drawingArea), winW);
+    gtk_drawing_area_set_content_height(GTK_DRAWING_AREA(g_widgetWin.drawingArea), winH);
+    gtk_window_set_default_size(GTK_WINDOW(g_widgetWin.window), winW, winH);
+    gtk_widget_set_tooltip_text(g_widgetWin.drawingArea, tip.c_str());
+    gtk_widget_queue_draw(g_widgetWin.drawingArea);
 }
