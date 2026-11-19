@@ -37,7 +37,7 @@ Battery levels of your wireless mouse, headset, keyboard and controller, right o
 - **Transparent taskbar themes** (e.g. Windhawk's Taskbar Styler): turn on *Background behind taskbar text* in the menu to keep the text readable over the wallpaper.
 - **Several monitors:** the widget shows on every monitor's taskbar, next to its clock, so it stays visible while a game runs fullscreen. *Show the widget on* in the menu picks *All monitors*, *Main monitor only*, or one display (e.g. only *Display 3*).
 - **More display options:** *Icons above percentages* stacks each icon over its level to save width; *Brand colors* shows known brands in their color (Razer green, HyperX red, ...) with a small level bar; two devices of the same kind get a tiny caption so they can be told apart; left and right taskbars get a column of devices.
-- **Languages:** English, العربية, Deutsch, Español, Français, עברית, 日本語, Polski, Português (Brasil), Русский, Türkçe, 简体中文 and 繁體中文. The app follows the Windows display language; *Language* in the menu picks another one. See [Translations](#translations) to add or improve a language.
+- **Languages:** English, العربية, Deutsch, Español, Français, עברית, 日本語, O'zbekcha, Polski, Português (Brasil), Русский, Türkçe, 简体中文 and 繁體中文. The app follows the Windows or Linux display language; *Language* in the menu picks another one. See [Translations](#translations) to add or improve a language.
 - **Brand colors:** devices of 15 known brands get their maker's color, with a soft glow and a thin level bar under the
   percentage: Razer green, Logitech blue, SteelSeries orange, Corsair yellow, HyperX / ROG / ZOWIE red, PlayStation,
   Xbox, Samsung, Apple, Jabra, JBL, Cooler Master and Steam. Each color has a dark- and a light-taskbar shade. The brand
@@ -341,10 +341,16 @@ The official repository's version tags build with `CHANNEL=stable`; local builds
 `BatteryHub.exe` on its own also works. Without `headsetcontrol.exe` next to it (or on `PATH`) you
 just lose the extra headsets.
 
-## Linux (experimental)
+## Linux
 
-A Linux build sits alongside the Windows app. It uses the same vendor drivers with a hidraw-based
-HID backend and a GTK4 StatusNotifierItem tray icon; the Windows code path is unchanged.
+A full Linux build sits alongside the Windows app. It uses all ~84 portable vendor HID drivers with a
+`hidraw`-based HID backend, Linux `ttyACM*`/`ttyUSB*` serial polling (ATK RS7 Pro, N9 Pro/Ultra),
+BlueZ RFCOMM socket polling (Samsung Galaxy Buds, Nothing Ear / CMF Buds), a 4-tier fallback battery
+poller (`/sys/class/power_supply/*`, UPower D-Bus, BlueZ D-Bus, and generic HID battery descriptors),
+and a GTK4 + Cairo StatusNotifierItem tray icon with the dark-themed Battery History & Runtime Insights
+viewer, custom device rename dialog, per-device smart battery alerts, brand accent colors, and full
+UI localization (including `O'zbekcha`). The Windows code path is unchanged.
+
 All Linux-only files are in `linux/` and `src/linux/`, and `build-linux.sh` builds it (Windows keeps using `build.bat`).
 
 | | Fedora | Ubuntu / Debian |
@@ -352,17 +358,20 @@ All Linux-only files are in `linux/` and `src/linux/`, and `build-linux.sh` buil
 | Compiler & make | `sudo dnf install gcc-c++ make` | `sudo apt install g++ make` |
 | GTK4 + Cairo | `sudo dnf install gtk4-devel cairo-devel` | `sudo apt install libgtk-4-dev libcairo2-dev` |
 
-No extra HID library is needed (hidraw is used directly).
+No extra HID or Bluetooth library headers are needed (`hidraw` and `AF_BLUETOOTH` sockets are used directly).
 
 ```sh
 ./build-linux.sh
-./build-linux.sh test         # unit test for the HID report-descriptor parser
+./build-linux.sh test         # run portable unit, protocol and driver test suites
 ./wireless-battery --list     # print detected levels and exit
-./wireless-battery --dump     # list HID collections
+./wireless-battery --json     # print a JSON array of devices and battery levels, then exit
+./wireless-battery --dump     # list HID collections, vendor frames and power/UPower/BlueZ diagnostics
+./wireless-battery --history  # open the GTK4 Battery History & Insights viewer directly
+./wireless-battery --demo     # sample devices of every brand instead of real ones
 ./wireless-battery --quit     # close the running tray instance
 ```
 
-HID access needs a udev rule, otherwise the app starts but finds no devices:
+HID access needs a udev rule, otherwise the app starts but can only read kernel/UPower/BlueZ fallback levels:
 
 ```sh
 sudo cp linux/99-wireless-battery.rules /etc/udev/rules.d/
@@ -371,12 +380,11 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
 The tray icon works natively on KDE Plasma; GNOME needs an AppIndicator host such as
-`gnome-shell-extension-appindicator`. The optional launcher is `linux/wireless-battery.desktop`
-(install it plus `linux/wireless-battery.svg` and the binary into `~/.local/`).
-
-Phase 1 covers Logitech, Razer, SteelSeries, Corsair, HyperX, PlayStation, Cooler Master, Glorious,
-Finalmouse and the shared Kysona/Pulsar/ATK/G-Wolves protocols. Bluetooth/UPower fallbacks, HeadsetControl and
-the remaining vendors are planned follow-up phases.
+`gnome-shell-extension-appindicator`. Settings (`[general]`, `[aliases]`, `[alerts]`, `ignore-devices`, `language`)
+are stored in `$XDG_CONFIG_HOME/wireless-battery/config.ini` (default `~/.config/wireless-battery/config.ini`),
+and battery history is recorded in `$XDG_DATA_HOME/wireless-battery/battery_history.tsv`
+(default `~/.local/share/wireless-battery/battery_history.tsv`). The optional launcher is
+`linux/wireless-battery.desktop` (install it plus `linux/wireless-battery.svg` and the binary into `~/.local/`).
 
 ## Limitations
 
