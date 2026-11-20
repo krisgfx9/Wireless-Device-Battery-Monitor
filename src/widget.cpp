@@ -49,6 +49,26 @@ int Dpi() {
 }
 int Px(int v) { return MulDiv(v, Dpi(), 96); }
 
+// Some taskbar customizations report tray geometry that places the strip off-screen (#2993).
+// A plain clamp to x=0 is insufficient: the Start/task buttons may cover a child widget there.
+// Preserve an earlier valid position; otherwise estimate the normal slot left of the tray.
+constexpr int RecoverHorizontalWidgetX(int desired, int widgetWidth, int barWidth,
+                                       int trayWidth, int lastGoodX, int gap) {
+    const int rightmost = std::max(0, barWidth - widgetWidth);
+    if (desired >= 0 && desired <= rightmost) return desired;  // don't touch healthy positioning
+    if (lastGoodX >= 0 && lastGoodX <= rightmost) return lastGoodX;
+    if (trayWidth > 0 && trayWidth < barWidth) {
+        // With invalid tray coordinates, assume the tray is anchored to the taskbar's outer edge.
+        return std::clamp(barWidth - trayWidth - widgetWidth - gap, 0, rightmost);
+    }
+    return std::clamp(desired, 0, rightmost);  // final fallback when tray metrics are unusable
+}
+static_assert(RecoverHorizontalWidgetX(-61, 59, 1707, 220, 1400, 2) == 1400); // keep valid position
+static_assert(RecoverHorizontalWidgetX(-61, 59, 1707, 220, -1, 2) == 1426);   // fresh startup
+static_assert(RecoverHorizontalWidgetX(1240, 80, 1707, 220, 900, 2) == 1240);// normal unchanged
+static_assert(RecoverHorizontalWidgetX(1720, 80, 1707, 220, -1, 2) == 1405); // right overflow
+static_assert(RecoverHorizontalWidgetX(-50, 120, 100, 0, -1, 2) == 0);        // too wide
+
 // Windows 11 puts the Widgets (weather) button right next to the tray when the taskbar is
 // left-aligned (start-aligned on right-to-left Windows). It is XAML, so only UI Automation knows
 // where it is. The element is looked up once per taskbar; its rectangle is re-read every few
@@ -1047,6 +1067,16 @@ bool Reposition() {
     if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\WirelessBattery", L"TaskbarOffset",
                      RRF_RT_REG_DWORD, nullptr, &customOffset, &sz) == ERROR_SUCCESS) {
         left -= Px((int)customOffset);
+    }
+
+    // Clamp only out-of-range positions. At x=0 the widget can be obscured by Start/XAML,
+    // so prefer its previous valid position or the space beside a normally anchored tray (#2993).
+    RECT taskbarClient{};
+    if (GetClientRect(g_taskbar, &taskbarClient)) {
+        left = RecoverHorizontalWidgetX(left, g_size.cx, taskbarClient.right - taskbarClient.left,
+                                        tr.right - tr.left, g_lastLeft, Px(2));
+    } else if (left < 0 && g_lastLeft >= 0) {
+        left = g_lastLeft;
     }
 
     // Windows 10: Explorer re-expands the task buttons on its own layout passes; narrow them again.
