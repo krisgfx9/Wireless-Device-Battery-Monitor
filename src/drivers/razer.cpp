@@ -8,13 +8,15 @@
 // Reference: github.com/openrazer/openrazer (protocol documentation in its driver sources).
 #include "drivers.h"
 
+#include <algorithm>
+
 namespace {
 
 BYTE KeyboardBatteryTid(USHORT pid) {
     // OpenRazer razerkbd_driver.c: razer_attr_read_charge_level / charge_status.
     switch (pid) {
         case 0x025C: case 0x0271: case 0x0290: case 0x0296:
-        case 0x02BA: case 0x02D2: case 0x02D5: return 0x9F;  // wireless keyboards
+        case 0x02BA: case 0x02C9: case 0x02D2: case 0x02D5: return 0x9F;  // wireless keyboards
         case 0x0258: case 0x0292: case 0x0298: case 0x02B9:
         case 0x02CD: case 0x02D4: case 0x02D7: return 0x1F;  // wired keyboards / Joro
         case 0x025A: return 0x3F;  // BlackWidow V3 Pro wired
@@ -82,8 +84,8 @@ constexpr USHORT kKeyboardPids[] = {
     0x0276, 0x0279, 0x027A, 0x0282, 0x0287, 0x028A, 0x028B, 0x028C, 0x028D, 0x028F,
     0x0290, 0x0292, 0x0293, 0x0294, 0x0295, 0x0296, 0x0298, 0x029D, 0x029E, 0x029F,
     0x02A0, 0x02A1, 0x02A2, 0x02A3, 0x02A5, 0x02A6, 0x02A7, 0x02B0, 0x02B6, 0x02B8,
-    0x02B9, 0x02BA, 0x02C5, 0x02C6, 0x02C7, 0x02CD, 0x02CF, 0x02D2, 0x02D4, 0x02D5,
-    0x02D7, 0x02E0, 0x02E1, 0x02EA, 0x0A24,
+    0x02B9, 0x02BA, 0x02C5, 0x02C6, 0x02C7, 0x02C9 /* BlackWidow V4 Low-profile HyperSpeed */, 0x02CD,
+    0x02CF, 0x02D2, 0x02D4, 0x02D5, 0x02D7, 0x02E0, 0x02E1, 0x02EA, 0x0A24,
 };
 
 constexpr USHORT kMousePids[] = {
@@ -114,7 +116,7 @@ DeviceKind Kind(const std::vector<HidColl>& colls, USHORT vid, USHORT pid) {
 }  // namespace
 
 void PollRazer(PollContext& ctx) {
-    std::vector<std::wstring> seenNames;
+    const auto firstRazer = ctx.out.size();
     for (auto [vid, pid] : ctx.Products(0x1532)) {
         for (const HidColl* c : ctx.Find(vid, pid, [](const HidColl& c) { return c.featLen() == 91; })) {
             HidDev d;
@@ -148,16 +150,18 @@ void PollRazer(PollContext& ctx) {
                 std::vector<BYTE> ch;
                 if (Command(d, tid, 0x07, 0x84, 0x02, ch) == Rz::Ok) s.charging = ch[1] == 1;
             }
-            // A wireless mouse plugged in for charging shows up twice (cable + dongle); keep one.
-            bool dup = false;
-            for (auto& n : seenNames) dup |= n == s.name;
-            if (!dup) {
-                seenNames.push_back(s.name);
+            // Cable + receiver can report the same device; keep a live reading over an offline receiver.
+            auto existing = std::find_if(ctx.out.begin() + firstRazer, ctx.out.end(),
+                                         [&](const DeviceStatus& o) { return o.name == s.name; });
+            if (existing == ctx.out.end()) {
                 ctx.Add(s, vid, pid);
             } else {
                 ctx.Claim(vid, pid);
-                for (auto& o : ctx.out)
-                    if (o.name == s.name && s.charging) o.charging = true;
+                if (!existing->connected && s.connected) {
+                    existing->connected = true;
+                    existing->percent = s.percent;
+                }
+                existing->charging |= s.charging;
             }
             break;
         }

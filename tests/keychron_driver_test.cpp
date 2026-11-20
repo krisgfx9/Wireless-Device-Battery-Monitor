@@ -56,6 +56,63 @@ PollContext Poll(const HidColl& c, std::map<std::pair<BYTE, BYTE>, std::vector<B
     PollKeychron(ctx);
     return ctx;
 }
+
+// 1K receiver (D030/D031): feature report 0x51 on the vendor collection of usage page 0x8C.
+std::vector<BYTE> featureReply;               // what GetFeature returns after a matching SetFeature
+std::vector<std::vector<BYTE>> featureWrites;
+bool featureQueued = false;
+
+HidColl LegacyCollection(USHORT pid) {
+    HidColl c;
+    c.path = L"keychron-1k";
+    c.vid = 0x3434;
+    c.pid = pid;
+    c.caps.UsagePage = 0x8C;
+    c.caps.Usage = 0x01;
+    c.caps.FeatureReportByteLength = 1001;
+    return c;
+}
+
+// Status reply [51][06][ok][00][vid lo][vid hi][pid lo][pid hi][..][..][..][battery %][charging].
+std::vector<BYTE> Status(BYTE ok, USHORT vid, USHORT pid, BYTE battery, BYTE charging) {
+    return { 0x51, 0x06, ok, 0x00, (BYTE)vid, (BYTE)(vid >> 8), (BYTE)pid, (BYTE)(pid >> 8), 0, 0, 0, battery, charging };
+}
+
+PollContext PollReceiver1k(const HidColl& c, std::vector<BYTE> reply) {
+    featureReply = std::move(reply);
+    featureWrites.clear();
+    featureQueued = false;
+    return Poll(c, {});
+}
+// Ultra-Link 8K receiver (D028): vendor collection FFC1:0001 with numbered 64-byte reports.
+HidColl UltraCollection(USHORT page = 0xFFC1) {
+    HidColl c;
+    c.path = L"keychron-ultra";
+    c.vid = 0x3434;
+    c.pid = 0xD028;
+    c.caps.UsagePage = page;
+    c.caps.Usage = 0x01;
+    c.caps.InputReportByteLength = 64;
+    c.caps.OutputReportByteLength = 64;
+    return c;
+}
+
+// Input report as Read() hands it over: [report id][cmd][payload...], 64 bytes; `bytes` index the
+// payload as the Launcher sees it (cmd at 0).
+std::vector<BYTE> UltraReply(BYTE id, BYTE cmd, std::initializer_list<std::pair<int, BYTE>> bytes) {
+    std::vector<BYTE> r(64, 0);
+    r[0] = id;
+    r[1] = cmd;
+    for (auto [i, v] : bytes) r[i + 1] = v;
+    return r;
+}
+// Receiver slots: [03] then per slot vid LE16, pid LE16, status at payload offsets 2/7/12.
+std::vector<BYTE> UltraSlots(int slot, BYTE status) {
+    int off = 2 + slot * 5;
+    return UltraReply(0xB5, 0x03, { { off, 0x34 }, { off + 1, 0x34 }, { off + 2, 0x49 }, { off + 3, 0xD0 }, { off + 4, status } });
+}
+const std::vector<BYTE> kUltraAskSlots = { 0xB5, 0x03 };
+const std::vector<BYTE> kUltraAskBase = { 0xB3, 0x06 };
 }  // namespace
 
 // Stand-ins for the Win32 HID transport. The production driver is linked unchanged.
@@ -69,8 +126,14 @@ bool HidDev::Open(const HidColl& c) {
 void HidDev::Close() { h_ = INVALID_HANDLE_VALUE; }
 void HidDev::Flush() { pending.clear(); }
 bool HidDev::Write(const std::vector<BYTE>& data, int) {
-    assert(data.size() == 65 && data[0] == 0);
     writes.push_back(data);
+    if (c_.page() == 0xFFC1) {  // Ultra-Link 8K: numbered report [id][cmd], keyed by (id, cmd)
+        assert(data.size() == 2 && (data[0] == 0xB5 || data[0] == 0xB3));
+        auto it = script.find({ data[0], data[1] });
+        if (it != script.end()) pending.push_back(it->second);
+        return true;
+    }
+    assert(data.size() == 65 && data[0] == 0);
     auto it = script.find({ data[1], data[4] });
     if (it != script.end()) pending.push_back(it->second);
     return true;
@@ -81,6 +144,20 @@ int HidDev::Read(std::vector<BYTE>& out, int timeoutMs) {
     out = pending.front();
     pending.erase(pending.begin());
     return (int)out.size();
+}
+bool HidDev::OpenFeatureOnly(const HidColl& c) { return Open(c); }
+bool HidDev::SetFeature(const std::vector<BYTE>& data) {
+    featureWrites.push_back(data);
+    featureQueued = data.size() >= 2 && data[0] == 0x51 && data[1] == 0x06 && !featureReply.empty();
+    return true;
+}
+bool HidDev::GetFeature(BYTE reportId, std::vector<BYTE>& out) {
+    assert(reportId == 0x51);
+    out.assign(c_.featLen(), 0);
+    out[0] = reportId;
+    if (!featureQueued) return true;  // nothing queued yet: the report reads back empty
+    std::copy(featureReply.begin(), featureReply.end(), out.begin());
+    return true;
 }
 std::wstring HidProduct(const HidColl&) { return L"Keychron 4K Link"; }
 std::wstring Hex4(USHORT v) {
@@ -170,5 +247,78 @@ int main() {
         assert(ctx.out.empty() && writes.empty());
     }
     assert(opens == 0);
-    std::puts("Keychron driver tests passed (4K Link, 8K Nordic, no battery, filtering).");
+
+    // 1K receiver (D030): M3 (D033) at 87 %, not charging. Only the status command is sent, the
+    // receiver is claimed and the 65-byte protocol is not tried on it.
+    const auto legacyA = LegacyCollection(0xD030);
+    ctx = PollReceiver1k(legacyA, Status(0x01, 0x3434, 0xD033, 87, 0x00));
+    assert((featureWrites == std::vector<std::vector<BYTE>>{ { 0x51, 0x06 } }));
+    assert(writes.empty());
+    assert(ctx.out.size() == 1);
+    assert(ctx.out[0].key == L"keychron:D033" && ctx.out[0].name == L"Keychron M3");
+    assert(ctx.out[0].percent == 87 && !ctx.out[0].charging);
+    assert(ctx.out[0].kind == DeviceKind::Mouse && ctx.out[0].via == L"2.4 GHz receiver");
+    assert(ctx.IsClaimed(0x3434, 0xD030));
+
+    // Type-C receiver (D031), charging; an unknown mouse pid gets the generic name.
+    ctx = PollReceiver1k(LegacyCollection(0xD031), Status(0x01, 0x3434, 0xD0FF, 100, 0x01));
+    assert(ctx.out.size() == 1 && ctx.out[0].percent == 100 && ctx.out[0].charging);
+    assert(ctx.out[0].name == L"Keychron mouse" && ctx.IsClaimed(0x3434, 0xD031));
+
+    // Error status, foreign vendor id, battery out of range, or no reply: nothing listed or claimed.
+    for (const auto& bad : { Status(0x00, 0x3434, 0xD033, 50, 0), Status(0x01, 0x1234, 0xD033, 50, 0),
+                             Status(0x01, 0x3434, 0xD033, 101, 0), std::vector<BYTE>{} }) {
+        ctx = PollReceiver1k(legacyA, bad);
+        assert(ctx.out.empty() && ctx.claimed.empty());
+    }
+
+    // The same usage page without a feature report, or another receiver pid: never opened.
+    opens = 0;
+    auto noFeature = legacyA;
+    noFeature.caps.FeatureReportByteLength = 0;
+    auto otherPid = LegacyCollection(0xD038);
+    for (const auto& c : { noFeature, otherPid }) {
+        ctx = PollReceiver1k(c, Status(0x01, 0x3434, 0xD033, 87, 0));
+        assert(ctx.out.empty() && featureWrites.empty());
+    }
+    assert(opens == 0);
+
+    // Ultra-Link 8K (D028): slot query B5 03, then base info B3 06; payload byte 19 = power
+    // (bits 0-6 battery %, bit 7 charging). Mouse in the second slot, 0xE4 = charging at 100 %.
+    const auto ultra = UltraCollection();
+    ctx = Poll(ultra, { { { 0xB5, 0x03 }, UltraSlots(1, 1) },
+                        { { 0xB3, 0x06 }, UltraReply(0xB3, 0x06, { { 19, 0xE4 } }) } });
+    assert((writes == std::vector<std::vector<BYTE>>{ kUltraAskSlots, kUltraAskBase }));
+    assert(ctx.out.size() == 1 && ctx.out[0].key == L"keychron:D028");
+    assert(ctx.out[0].percent == 100 && ctx.out[0].charging);
+    assert(ctx.out[0].name == L"Keychron mouse" && ctx.out[0].via == L"2.4 GHz receiver");
+    assert(ctx.out[0].kind == DeviceKind::Mouse && ctx.IsClaimed(0x3434, 0xD028));
+    // 0x37 = 55 %, not charging; mouse in the first slot.
+    ctx = Poll(ultra, { { { 0xB5, 0x03 }, UltraSlots(0, 1) },
+                        { { 0xB3, 0x06 }, UltraReply(0xB3, 0x06, { { 19, 0x37 } }) } });
+    assert(ctx.out.size() == 1 && ctx.out[0].percent == 55 && !ctx.out[0].charging);
+
+    // No connected slot, no slot reply, no base reply or power 0 / out of range: nothing listed,
+    // nothing claimed; B3 06 is only sent when a slot is connected.
+    ctx = Poll(ultra, { { { 0xB5, 0x03 }, UltraSlots(0, 0) },
+                        { { 0xB3, 0x06 }, UltraReply(0xB3, 0x06, { { 19, 50 } }) } });
+    assert(ctx.out.empty() && ctx.claimed.empty());
+    assert((writes == std::vector<std::vector<BYTE>>{ kUltraAskSlots }));
+    ctx = Poll(ultra, { { { 0xB3, 0x06 }, UltraReply(0xB3, 0x06, { { 19, 50 } }) } });
+    assert(ctx.out.empty() && ctx.claimed.empty());
+    assert((writes == std::vector<std::vector<BYTE>>{ kUltraAskSlots }));
+    for (BYTE bad : { (BYTE)0x00, (BYTE)0x80, (BYTE)101, (BYTE)0xFF }) {
+        ctx = Poll(ultra, { { { 0xB5, 0x03 }, UltraSlots(2, 1) },
+                            { { 0xB3, 0x06 }, UltraReply(0xB3, 0x06, { { 19, bad } }) } });
+        assert(ctx.out.empty() && ctx.claimed.empty());
+        assert((writes == std::vector<std::vector<BYTE>>{ kUltraAskSlots, kUltraAskBase }));
+    }
+    ctx = Poll(ultra, { { { 0xB5, 0x03 }, UltraSlots(0, 1) } });
+    assert(ctx.out.empty() && ctx.claimed.empty());
+
+    // Other collections on D028 (e.g. FF0B:0104) are not opened by the Ultra-Link path.
+    opens = 0;
+    ctx = Poll(UltraCollection(0xFF0B), { { { 0xB5, 0x03 }, UltraSlots(0, 1) } });
+    assert(ctx.out.empty() && writes.empty() && opens == 0);
+    std::puts("Keychron driver tests passed (4K Link, 8K Nordic, 1K receiver, Ultra-Link 8K, no battery, filtering).");
 }

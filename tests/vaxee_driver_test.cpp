@@ -29,21 +29,20 @@ std::vector<BYTE> Reply(BYTE command, BYTE value) {
     r[5] = value;
     return r;
 }
-PollContext Poll(std::vector<std::vector<BYTE>> data, bool cable = false) {
+PollContext Poll(std::vector<std::vector<BYTE>> data, USHORT pid = 0x1002) {
     PollContext unplugged;
     PollVaxee(unplugged); // Reset driver state between independent test cases.
     replies = std::move(data);
     queries = 0;
     PollContext ctx;
     ctx.colls = {Collection()};
-    if (cable) {
-        ctx.colls[0].pid = 0x1011;
-        ctx.colls[0].path = L"test-cable";
-    }
+    ctx.colls[0].pid = pid;
+    if (pid == 0x1011) ctx.colls[0].path = L"test-cable";
     PollVaxee(ctx);
     return ctx;
 }
 }
+std::wstring Hex4(USHORT v) { wchar_t b[8]; swprintf(b, 8, L"%04X", v); return b; }  // used for the device key
 bool HidDev::OpenFeatureOnly(const HidColl& c) {
     ++opens;
     if (!openOk) return false;
@@ -79,7 +78,11 @@ int main() {
     int before = opens;
     PollVaxee(ctx);
     assert(opens == before);
-    ctx = Poll({Reply(0x0B, 14), Reply(0x10, 1)}, true);
+    ctx = Poll({Reply(0x0B, 12), Reply(0x10, 0)}, 0x2002); // 8K receiver
+    assert(ctx.out.size() == 1 && ctx.out[0].percent == 60);
+    assert(ctx.out[0].name == L"VAXEE 8K Wireless");
+    assert(ctx.out[0].via == L"2.4 GHz receiver" && ctx.IsClaimed(0x3057, 0x2002));
+    ctx = Poll({Reply(0x0B, 14), Reply(0x10, 1)}, 0x1011);
     assert(ctx.out.size() == 1 && ctx.out[0].percent == 70 && ctx.out[0].charging);
     assert(ctx.out[0].name == L"ZYGEN NP-01S V2 Wireless" && ctx.out[0].via == L"USB cable");
     assert(ctx.IsClaimed(0x3057, 0x1011));
@@ -92,6 +95,16 @@ int main() {
     assert(unpluggedAgain.out.empty());
     ctx = Poll({Reply(0x0B, 20), Reply(0x10, 1)});
     assert(ctx.out.size() == 1 && ctx.out[0].percent == 100 && ctx.out[0].charging);
+    // Moving the receiver to another USB port changes its HID path but not its key, and the
+    // "gone" entry for the old port is replaced instead of shown next to the new one.
+    std::wstring firstKey = ctx.out[0].key;
+    assert(firstKey == L"vaxee:1002");
+    replies = {Reply(0x0B, 19), Reply(0x10, 0)};
+    PollContext moved;
+    moved.colls = {Collection()};
+    moved.colls[0].path = L"test-other-port";
+    PollVaxee(moved);
+    assert(moved.out.size() == 1 && moved.out[0].connected && moved.out[0].key == firstKey);
     ctx = Poll({Reply(0x0B, 0)});
     assert(ctx.out.size() == 1 && ctx.out[0].percent == 0);
     ctx = Poll({Reply(0x0B, 21), Reply(0x0B, 7), Reply(0x10, 0)});
