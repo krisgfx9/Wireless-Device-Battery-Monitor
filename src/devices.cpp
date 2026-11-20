@@ -52,6 +52,7 @@ std::vector<DeviceStatus> PollAllDevices() {
     PollAulaMouse(ctx);
     PollEweadn(ctx);     // EWEADN S7 / S9 mice on 372E:103D / 1027 (AULA keeps 372E:106C)
     PollDareu(ctx);
+    PollPiao(ctx);       // IPI PIAO mouse on 372E:1014 receiver (and wired 1015/1028/1056)
     PollZenith(ctx);
     PollDarmoshark(ctx);
     PollDarmosharkNrf(ctx);
