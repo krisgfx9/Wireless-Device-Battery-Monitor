@@ -9,8 +9,6 @@ if not defined APP_VERSION set "APP_VERSION=0.0.0"
 set "APP_CHANNEL=%~2"
 if not defined APP_CHANNEL set "APP_CHANNEL=dev"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\generate-version.ps1 -Version "%APP_VERSION%" -Channel "%APP_CHANNEL%" || exit /b 1
-rem Every lang\*.txt is a built-in UI language: joined into one resource, each after an "@file <name>" line.
-(for %%f in (lang\*.txt) do (echo @file %%~nf& type "%%f"& echo.)) > build\languages.txt
 windres -i res\app.rc -o build\app_res.o --include-dir res --include-dir build || exit /b 1
 set SOURCES=
 for %%f in (src\*.cpp src\drivers\*.cpp) do set SOURCES=!SOURCES! %%f

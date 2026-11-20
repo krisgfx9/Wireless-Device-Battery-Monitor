@@ -1,3 +1,7 @@
+<!-- lang-switcher:start -->
+🌐 **Languages:** **English** | [العربية](i18n/ar.md#sec-darkrim) | [Deutsch](i18n/de.md#sec-darkrim) | [Español](i18n/es.md#sec-darkrim) | [فارسی](i18n/fa.md#sec-darkrim) | [Français](i18n/fr.md#sec-darkrim) | [עברית](i18n/he.md#sec-darkrim) | [Magyar](i18n/hu.md#sec-darkrim) | [日本語](i18n/ja.md#sec-darkrim) | [한국어](i18n/ko.md#sec-darkrim) | [Polski](i18n/pl.md#sec-darkrim) | [Português (Brasil)](i18n/pt-BR.md#sec-darkrim) | [Русский](i18n/ru.md#sec-darkrim) | [Svenska](i18n/sv.md#sec-darkrim) | [Türkçe](i18n/tr.md#sec-darkrim) | [Українська](i18n/uk.md#sec-darkrim) | [Tiếng Việt](i18n/vi.md#sec-darkrim) | [简体中文](i18n/zh-CN.md#sec-darkrim) | [繁體中文](i18n/zh-TW.md#sec-darkrim) | [Add a language](i18n/README.md)
+<!-- lang-switcher:end -->
+
 # DARKRIM SHADOW / 寸渊影弑 receiver
 
 Hardware-tested on `3654:6901`, manufacturer `Jieli Technology`, release `0100`.

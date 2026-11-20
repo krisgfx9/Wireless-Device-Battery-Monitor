@@ -1,3 +1,7 @@
+<!-- lang-switcher:start -->
+🌐 **Languages:** **English** | [العربية](../i18n/ar.md#sec-keychron-firmware) | [Deutsch](../i18n/de.md#sec-keychron-firmware) | [Español](../i18n/es.md#sec-keychron-firmware) | [فارسی](../i18n/fa.md#sec-keychron-firmware) | [Français](../i18n/fr.md#sec-keychron-firmware) | [עברית](../i18n/he.md#sec-keychron-firmware) | [Magyar](../i18n/hu.md#sec-keychron-firmware) | [日本語](../i18n/ja.md#sec-keychron-firmware) | [한국어](../i18n/ko.md#sec-keychron-firmware) | [Polski](../i18n/pl.md#sec-keychron-firmware) | [Português (Brasil)](../i18n/pt-BR.md#sec-keychron-firmware) | [Русский](../i18n/ru.md#sec-keychron-firmware) | [Svenska](../i18n/sv.md#sec-keychron-firmware) | [Türkçe](../i18n/tr.md#sec-keychron-firmware) | [Українська](../i18n/uk.md#sec-keychron-firmware) | [Tiếng Việt](../i18n/vi.md#sec-keychron-firmware) | [简体中文](../i18n/zh-CN.md#sec-keychron-firmware) | [繁體中文](../i18n/zh-TW.md#sec-keychron-firmware) | [Add a language](../i18n/README.md)
+<!-- lang-switcher:end -->
+
 # Keychron keyboard battery over the 2.4 GHz receiver
 
 Keychron's stock firmware only reports the keyboard's battery over Bluetooth. With the small QMK change in

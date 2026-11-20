@@ -1,3 +1,7 @@
+<!-- lang-switcher:start -->
+🌐 **Languages:** **English** | [العربية](i18n/ar.md#sec-gamesir-cyclone-pro) | [Deutsch](i18n/de.md#sec-gamesir-cyclone-pro) | [Español](i18n/es.md#sec-gamesir-cyclone-pro) | [فارسی](i18n/fa.md#sec-gamesir-cyclone-pro) | [Français](i18n/fr.md#sec-gamesir-cyclone-pro) | [עברית](i18n/he.md#sec-gamesir-cyclone-pro) | [Magyar](i18n/hu.md#sec-gamesir-cyclone-pro) | [日本語](i18n/ja.md#sec-gamesir-cyclone-pro) | [한국어](i18n/ko.md#sec-gamesir-cyclone-pro) | [Polski](i18n/pl.md#sec-gamesir-cyclone-pro) | [Português (Brasil)](i18n/pt-BR.md#sec-gamesir-cyclone-pro) | [Русский](i18n/ru.md#sec-gamesir-cyclone-pro) | [Svenska](i18n/sv.md#sec-gamesir-cyclone-pro) | [Türkçe](i18n/tr.md#sec-gamesir-cyclone-pro) | [Українська](i18n/uk.md#sec-gamesir-cyclone-pro) | [Tiếng Việt](i18n/vi.md#sec-gamesir-cyclone-pro) | [简体中文](i18n/zh-CN.md#sec-gamesir-cyclone-pro) | [繁體中文](i18n/zh-TW.md#sec-gamesir-cyclone-pro) | [Add a language](i18n/README.md)
+<!-- lang-switcher:end -->
+
 # GameSir Cyclone Pro battery support
 
 ## Why the controller showed as a full Xbox controller

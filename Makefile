@@ -22,12 +22,7 @@ build/%.o: src/%.cpp $(wildcard src/*.h src/drivers/*.h) build/version.h
 build/version.h: scripts/generate-version.ps1 FORCE
 	powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/generate-version.ps1 -Version "$(VERSION)" -Channel "$(CHANNEL)"
 
-# Every lang/*.txt is a built-in UI language: joined into one resource, each after an "@file <name>" line.
-build/languages.txt: $(wildcard lang/*.txt)
-	@mkdir -p build
-	@printf '' > $@; for f in $^; do printf '@file %s\n' "$$(basename $$f .txt)" >> $@; cat "$$f" >> $@; printf '\n' >> $@; done
-
-build/app_res.o: res/app.rc res/app.manifest res/app.ico res/app_light.ico build/languages.txt build/version.h
+build/app_res.o: res/app.rc res/app.manifest res/app.ico res/app_light.ico build/version.h
 	@mkdir -p build
 	$(WINDRES) -i $< -o $@ --include-dir res --include-dir build
 
@@ -114,6 +109,8 @@ test: test-update-core test-update-win test-update-signature
 	./build/jabra_driver_test.exe
 	$(CXX) -std=c++17 -O2 -Wall tests/gamesir_ble_protocol_test.cpp -o build/gamesir_ble_protocol_test.exe
 	./build/gamesir_ble_protocol_test.exe
+	$(CXX) -std=c++17 -O2 -Wall -Wextra -Isrc tests/i18n_core_test.cpp -o build/i18n_core_test.exe
+	./build/i18n_core_test.exe
 
 test-update-core:
 	@mkdir -p build

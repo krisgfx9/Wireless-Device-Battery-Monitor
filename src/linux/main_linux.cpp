@@ -6,6 +6,8 @@
 #include "../platform_compat.h"
 #include "../devices.h"
 #include "../hid.h"
+#include "../i18n.h"
+#include "../i18n_core.h"
 #include "../json_output.h"
 
 #include <gtk/gtk.h>
@@ -43,6 +45,8 @@ struct MenuNode {
     bool separator = false;
     bool toggle = false;
     bool checked = false;
+    bool submenu = false;
+    bool radio = false;
 };
 
 struct State {
@@ -62,6 +66,8 @@ struct State {
     std::set<std::wstring> hidden;
     bool hideLastKnown = false;
     bool autostart = false;
+    std::wstring language;
+    std::vector<i18n::Language> languages;
 };
 State g;
 
@@ -78,6 +84,8 @@ void LoadSettings() {
     if (hidden) for (int i = 0; hidden[i]; i++) g.hidden.insert(Utf8ToWide(hidden[i]));
     g.hideLastKnown = g_key_file_get_boolean(kf, "general", "hide-last-known", nullptr);
     g.autostart = g_key_file_get_boolean(kf, "general", "autostart", nullptr);
+    g_autofree gchar* lang = g_key_file_get_string(kf, "general", "language", nullptr);
+    g.language = lang ? Utf8ToWide(lang) : std::wstring{};
 }
 
 void SaveSettings() {
@@ -91,8 +99,11 @@ void SaveSettings() {
     else g_key_file_set_string_list(kf, "general", "hidden", ptrs.data(), ptrs.size());
     g_key_file_set_boolean(kf, "general", "hide-last-known", g.hideLastKnown);
     g_key_file_set_boolean(kf, "general", "autostart", g.autostart);
+    if (g.language.empty()) g_key_file_remove_key(kf, "general", "language", nullptr);
+    else g_key_file_set_string(kf, "general", "language", WideToUtf8(g.language).c_str());
     std::string path = ConfigPath();
-    g_mkdir_with_parents(g_path_get_dirname(path.c_str()), 0700);
+    g_autofree gchar* dir = g_path_get_dirname(path.c_str());
+    g_mkdir_with_parents(dir, 0700);
     g_key_file_save_to_file(kf, path.c_str(), nullptr);
 }
 
@@ -175,15 +186,19 @@ GVariant* RenderPixmap(int pct, bool charging, bool dim, bool low) {
 
 // ---- presentation state -----------------------------------------------------------------------
 
-std::wstring StatusText(const DeviceStatus& s) {
-    if (!s.connected) return L"off / not connected";
+std::wstring StatusText(const DeviceStatus& s, bool localized = true) {
+    auto tr = [&](const wchar_t* en) -> std::wstring {
+        return localized ? std::wstring(T(en)) : std::wstring(en);
+    };
+    if (!s.connected) return tr(L"off / not connected");
     std::wstring t;
-    if (!s.levelText.empty() && s.percent >= 0) t = s.levelText;
+    if (!s.levelText.empty() && s.percent >= 0) t = localized ? T(s.levelText) : s.levelText;
     else if (s.percent >= 0) t = std::to_wstring(s.percent) + L"%";
-    else t = L"unknown";
+    else t = tr(L"unknown");
     if (!s.detail.empty() && s.percent >= 0) t += L" (" + s.detail + L")";
-    if (s.charging) t += L", charging";
-    if (s.asleep) t += L", asleep";
+    if (s.full || (s.charging && s.percent >= 100)) t += L", " + tr(L"fully charged");
+    else if (s.charging) t += L", " + tr(L"charging");
+    if (s.asleep) t += L", " + tr(L"asleep");
     return t;
 }
 
@@ -232,9 +247,14 @@ void AddMenuProperties(GVariantBuilder& props, const MenuNode* n) {
     g_variant_builder_add(&props, "{sv}", "label", g_variant_new_string(n->label.c_str()));
     g_variant_builder_add(&props, "{sv}", "enabled", g_variant_new_boolean(TRUE));
     g_variant_builder_add(&props, "{sv}", "visible", g_variant_new_boolean(TRUE));
-    g_variant_builder_add(&props, "{sv}", "type", g_variant_new_string(n->toggle ? "checkbox" : "standard"));
-    if (n->toggle)
+    g_variant_builder_add(&props, "{sv}", "type", g_variant_new_string("standard"));
+    if (n->submenu) {
+        g_variant_builder_add(&props, "{sv}", "children-display", g_variant_new_string("submenu"));
+    } else if (n->toggle) {
+        g_variant_builder_add(&props, "{sv}", "toggle-type",
+                              g_variant_new_string(n->radio ? "radio" : "checkmark"));
         g_variant_builder_add(&props, "{sv}", "toggle-state", g_variant_new_int32(n->checked ? 1 : 0));
+    }
 }
 
 GVariant* BuildLayout(int id, int depth) {
@@ -254,8 +274,9 @@ GVariant* BuildLayout(int id, int depth) {
     return g_variant_ref_sink(layout);
 }
 
-void AddMenuNode(int parent, const std::string& label, const std::string& action,
-                 bool separator = false, bool toggle = false, bool checked = false) {
+int AddMenuNode(int parent, const std::string& label, const std::string& action,
+                bool separator = false, bool toggle = false, bool checked = false,
+                bool submenu = false, bool radio = false) {
     MenuNode n;
     n.id = (int)g.menuNodes.size() + 1;
     n.parent = parent;
@@ -264,13 +285,16 @@ void AddMenuNode(int parent, const std::string& label, const std::string& action
     n.separator = separator;
     n.toggle = toggle;
     n.checked = checked;
+    n.submenu = submenu;
+    n.radio = radio;
+    int id = n.id;
     g.menuNodes.push_back(std::move(n));
+    return id;
 }
 
 void RebuildMenu() {
     if (!g.app) return;
-    for (const auto& name : g.deviceActions)
-        g_action_map_remove_action(G_ACTION_MAP(g.app), name.c_str());
+    i18n::Init();  // pick up language files edited or added on disk
     g.deviceActions.clear();
     g.menuNodes.clear();
 
@@ -282,22 +306,37 @@ void RebuildMenu() {
     });
     int shown = 0;
     for (const auto* s : list) {
-        std::string label = WideToUtf8(s->name) + ": " + WideToUtf8(StatusText(*s));
+        std::string label = WideToUtf8(s->name) + ": " + WideToUtf8(StatusText(*s, true));
         std::string action = "device-" + std::to_string(shown);
         AddMenuNode(0, label, action);
         g.deviceActions.push_back(action);
         shown++;
     }
-    if (!shown) AddMenuNode(0, "No devices with battery info found", "");
+    if (!shown) AddMenuNode(0, WideToUtf8(T(L"No devices with battery info found")), "");
     AddMenuNode(0, "", "", true);
-    AddMenuNode(0, "Refresh now", "refresh");
-    AddMenuNode(0, g.hideLastKnown ? "Hide last known / asleep devices (on)"
-                                  : "Hide last known / asleep devices (off)",
+    AddMenuNode(0, WideToUtf8(T(L"Refresh now")), "refresh");
+    AddMenuNode(0, WideToUtf8(T(L"Hide last known / asleep devices")),
                 "toggle-last-known", false, true, g.hideLastKnown);
-    AddMenuNode(0, g.autostart ? "Start at login (on)" : "Start at login (off)",
+    AddMenuNode(0, WideToUtf8(T(L"Start at login")),
                 "toggle-autostart", false, true, g.autostart);
+
+    int langId = AddMenuNode(0, WideToUtf8(T(L"Language")), "", false, false, false, true, false);
+    AddMenuNode(langId, WideToUtf8(T(L"Automatic (system language)")), "lang-auto",
+                false, true, g.language.empty(), false, true);
+    AddMenuNode(langId, "", "", true);
+    g.languages = i18n::Available();
+    if (g.languages.size() > 64) g.languages.resize(64);
+    for (size_t i = 0; i < g.languages.size(); i++) {
+        bool selected = !g.language.empty() &&
+                        i18n_core::NormalizeTag(g.languages[i].code) == i18n_core::NormalizeTag(g.language);
+        AddMenuNode(langId, WideToUtf8(g.languages[i].name), "lang-" + std::to_string(i),
+                    false, true, selected, false, true);
+    }
+    AddMenuNode(langId, "", "", true);
+    AddMenuNode(langId, WideToUtf8(T(L"Add your own language...")), "lang-add");
+
     AddMenuNode(0, "", "", true);
-    AddMenuNode(0, "Quit", "quit");
+    AddMenuNode(0, WideToUtf8(T(L"Exit")), "quit");
 
     g.menuRevision++;
     if (g.conn)
@@ -318,9 +357,9 @@ void RecomputePresentation() {
         if (s.percent >= 0 && s.percent <= kLowBattery && !s.charging) low = true;
         if (tip != "BatteryHub") tip += "\n";
         else tip = "";
-        tip += WideToUtf8(s.name) + ": " + WideToUtf8(StatusText(s));
+        tip += WideToUtf8(s.name) + ": " + WideToUtf8(StatusText(s, true));
     }
-    if (!any) { pct = -1; tip = "BatteryHub\nNo devices with battery info found"; }
+    if (!any) { pct = -1; tip = "BatteryHub\n" + WideToUtf8(T(L"No devices with battery info found")); }
     if (g.pixmap) g_variant_unref(g.pixmap);
     g.pixmap = RenderPixmap(pct, charging, dim, low);
     g.tooltip = tip;
@@ -500,7 +539,7 @@ static void dbusmenu_method_call(GDBusConnection*, const gchar*, const gchar*, c
 static GVariant* dbusmenu_get_property(GDBusConnection*, const gchar*, const gchar*, const gchar*,
                                        const gchar* name, GError**, gpointer) {
     if (!strcmp(name, "Revision")) return g_variant_new_int32(g.menuRevision);
-    if (!strcmp(name, "TextDirection")) return g_variant_new_string("ltr");
+    if (!strcmp(name, "TextDirection")) return g_variant_new_string(i18n::Rtl() ? "rtl" : "ltr");
     return nullptr;
 }
 
@@ -567,6 +606,33 @@ void OnToggleAutostart(GSimpleAction* action, GVariant*, gpointer) {
     ApplyAutostart(g.autostart);
 }
 
+void OnQuit(GSimpleAction*, GVariant*, gpointer) {
+    g_application_quit(G_APPLICATION(g.app));
+}
+
+void OnLangAuto(GSimpleAction*, GVariant*, gpointer) {
+    g.language.clear();
+    i18n::SetChoice(L"");
+    SaveSettings();
+    RecomputePresentation();
+}
+
+void OnLangAdd(GSimpleAction*, GVariant*, gpointer) {
+    std::string dir = i18n::PrepareUserFolder();
+    if (dir.empty()) return;
+    g_autofree gchar* uri = g_filename_to_uri(dir.c_str(), nullptr, nullptr);
+    if (uri) g_app_info_launch_default_for_uri(uri, nullptr, nullptr);
+}
+
+void OnLangSelect(GSimpleAction*, GVariant*, gpointer data) {
+    size_t index = (size_t)(intptr_t)data;
+    if (index >= g.languages.size()) return;
+    g.language = g.languages[index].code;
+    i18n::SetChoice(g.language);
+    SaveSettings();
+    RecomputePresentation();
+}
+
 void OnDevice(GSimpleAction*, GVariant*, gpointer data) {
     size_t index = (size_t)(intptr_t)data;
     std::vector<const DeviceStatus*> list;
@@ -586,6 +652,9 @@ const GActionEntry kActions[] = {
     { "refresh", OnRefresh, nullptr, nullptr, nullptr, {} },
     { "toggle-last-known", OnToggleLastKnown, nullptr, "false", nullptr, {} },
     { "toggle-autostart", OnToggleAutostart, nullptr, "false", nullptr, {} },
+    { "quit", OnQuit, nullptr, nullptr, nullptr, {} },
+    { "lang-auto", OnLangAuto, nullptr, nullptr, nullptr, {} },
+    { "lang-add", OnLangAdd, nullptr, nullptr, nullptr, {} },
 };
 
 gboolean PushResults(gpointer) {
@@ -624,7 +693,7 @@ int ListToConsole(bool dump) {
     auto list = PollAllDevices();
     if (list.empty()) printf("No devices with battery info found.\n");
     for (const auto& s : list) {
-        std::wstring line = s.name + L"  [" + s.via + L"]  " + StatusText(s);
+        std::wstring line = s.name + L"  [" + s.via + L"]  " + StatusText(s, false);
         if (s.millivolts) line += L", " + std::to_wstring(s.millivolts) + L" mV";
         line += L"   (" + s.key + L")\n";
         std::string u = WideToUtf8(line);
@@ -658,13 +727,23 @@ int QuitRunning() {
 int main(int argc, char** argv) {
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
-            printf("Usage: wireless-battery [option]\n"
-                   "  (no option)  Run the tray app\n"
-                   "  --list       Print devices and battery levels, then exit\n"
-                   "  --json       Print a JSON array of devices and battery levels, then exit\n"
-                   "  --dump       Print all HID collections and devices, then exit\n"
-                   "  --quit       Ask a running instance to quit\n"
-                   "  -h, --help   Show this help\n");
+            LoadSettings();
+            i18n::Init();
+            if (!g.language.empty()) i18n::SetChoice(g.language);
+            printf("%s\n"
+                   "  %-14s %s\n"
+                   "  %-14s %s\n"
+                   "  %-14s %s\n"
+                   "  %-14s %s\n"
+                   "  %-14s %s\n"
+                   "  %-14s %s\n",
+                   WideToUtf8(T(L"Usage: wireless-battery [option]")).c_str(),
+                   WideToUtf8(T(L"(no option)")).c_str(), WideToUtf8(T(L"Run the tray app")).c_str(),
+                   "--list", WideToUtf8(T(L"Print devices and battery levels")).c_str(),
+                   "--json", WideToUtf8(T(L"Print a JSON array of devices and battery levels")).c_str(),
+                   "--dump", WideToUtf8(T(L"Print every HID collection and device")).c_str(),
+                   "--quit", WideToUtf8(T(L"Quit a running instance")).c_str(),
+                   "-h, --help", WideToUtf8(T(L"Show this help")).c_str());
             return 0;
         }
         if (!strcmp(argv[i], "--list")) return ListToConsole(false);
@@ -674,16 +753,24 @@ int main(int argc, char** argv) {
     }
 
     LoadSettings();
+    i18n::Init();
+    if (!g.language.empty()) i18n::SetChoice(g.language);
     g_autoptr(GError) error = nullptr;
     if (!gtk_init_check()) { fprintf(stderr, "Cannot initialise GTK (no display?).\n"); return 1; }
 
     g.app = GTK_APPLICATION(gtk_application_new(kAppId, G_APPLICATION_DEFAULT_FLAGS));
     g_action_map_add_action_entries(G_ACTION_MAP(g.app), kActions, G_N_ELEMENTS(kActions), nullptr);
-    // Up to 32 device toggle actions, rebound to the current device list whenever the menu is rebuilt.
+    // Up to 32 device toggle actions and 64 language actions, rebound whenever the menu is rebuilt.
     for (intptr_t i = 0; i < 32; i++) {
         std::string name = "device-" + std::to_string(i);
         GSimpleAction* a = g_simple_action_new(name.c_str(), nullptr);
         g_signal_connect(a, "activate", G_CALLBACK(OnDevice), (gpointer)i);
+        g_action_map_add_action(G_ACTION_MAP(g.app), G_ACTION(a));
+    }
+    for (intptr_t i = 0; i < 64; i++) {
+        std::string name = "lang-" + std::to_string(i);
+        GSimpleAction* a = g_simple_action_new(name.c_str(), nullptr);
+        g_signal_connect(a, "activate", G_CALLBACK(OnLangSelect), (gpointer)i);
         g_action_map_add_action(G_ACTION_MAP(g.app), G_ACTION(a));
     }
 

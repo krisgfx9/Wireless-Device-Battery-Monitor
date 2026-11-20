@@ -31,13 +31,37 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 CloseApplications=no
+ShowLanguageDialog=yes
+LanguageDetectionMethod=uilanguage
+
+[Languages]
+Name: "en"; MessagesFile: "compiler:Default.isl,lang\en.isl"
+Name: "ar"; MessagesFile: "compiler:Languages\Arabic.isl,lang\ar.isl"
+Name: "de"; MessagesFile: "compiler:Languages\German.isl,lang\de.isl"
+Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl,lang\es.isl"
+Name: "fa"; MessagesFile: "compiler:Default.isl,lang\fa.isl"
+Name: "fr"; MessagesFile: "compiler:Languages\French.isl,lang\fr.isl"
+Name: "he"; MessagesFile: "compiler:Languages\Hebrew.isl,lang\he.isl"
+Name: "hu"; MessagesFile: "compiler:Languages\Hungarian.isl,lang\hu.isl"
+Name: "ja"; MessagesFile: "compiler:Languages\Japanese.isl,lang\ja.isl"
+Name: "ko"; MessagesFile: "compiler:Languages\Korean.isl,lang\ko.isl"
+Name: "pl"; MessagesFile: "compiler:Languages\Polish.isl,lang\pl.isl"
+Name: "ptBR"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl,lang\pt-BR.isl"
+Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl,lang\ru.isl"
+Name: "sv"; MessagesFile: "compiler:Languages\Swedish.isl,lang\sv.isl"
+Name: "tr"; MessagesFile: "compiler:Languages\Turkish.isl,lang\tr.isl"
+Name: "uk"; MessagesFile: "compiler:Languages\Ukrainian.isl,lang\uk.isl"
+Name: "vi"; MessagesFile: "compiler:Default.isl,lang\vi.isl"
+Name: "zhCN"; MessagesFile: "compiler:Default.isl,lang\zh-CN.isl"
+Name: "zhTW"; MessagesFile: "compiler:Default.isl,lang\zh-TW.isl"
 
 [Tasks]
-Name: "autostart"; Description: "Start BatteryHub when I sign in to Windows"
+Name: "autostart"; Description: "{cm:AutostartTask}"
 
 [Files]
 Source: "{#Root}\BatteryHub.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Root}\third_party\headsetcontrol\headsetcontrol.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Root}\lang\*.json"; DestDir: "{app}\lang"; Flags: ignoreversion
 Source: "{#Root}\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 Source: "{#Root}\installer\THIRD_PARTY_NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -50,8 +74,8 @@ Type: files; Name: "{autoprograms}\Wireless Battery.lnk"
 Name: "{autoprograms}\BatteryHub"; Filename: "{app}\BatteryHub.exe"
 
 [Run]
-Filename: "{app}\BatteryHub.exe"; Description: "Start BatteryHub now"; Flags: nowait postinstall skipifsilent; Check: not IsUpdate
-Filename: "https://ko-fi.com/krisgfx"; Description: "Enjoying BatteryHub? Support it on Ko-fi"; Flags: shellexec postinstall unchecked skipifsilent nowait runasoriginaluser
+Filename: "{app}\BatteryHub.exe"; Description: "{cm:LaunchApp}"; Flags: nowait postinstall skipifsilent; Check: not IsUpdate
+Filename: "https://ko-fi.com/krisgfx"; Description: "{cm:SupportProject}"; Flags: shellexec postinstall unchecked skipifsilent nowait runasoriginaluser
 
 [UninstallRun]
 Filename: "{app}\BatteryHub.exe"; Parameters: "--quit"; Flags: runhidden waituntilterminated; RunOnceId: "QuitApp"
@@ -80,7 +104,7 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
   if IsUpdate() and not QuitRunningApp() then
-    Result := 'BatteryHub could not close. Close it and try updating again.';
+    Result := CustomMessage('CloseFailed');
 end;
 
 function InstalledRunValue(): String;
@@ -153,13 +177,9 @@ begin
   if (CurPageID = wpSelectDir) and not WizardSilent() and not CanWriteTo(WizardDirValue()) then
   begin
     if IsAdminInstallMode() then
-      MsgBox('Setup cannot create or write to this folder:' + #13#10 + WizardDirValue() + #13#10#13#10 +
-        'Please choose a different folder.', mbError, MB_OK)
+      MsgBox(FmtMessage(CustomMessage('DirNotWritableAdmin'), [WizardDirValue()]), mbError, MB_OK)
     else
-      MsgBox('Your account cannot create or write to this folder without administrator rights:' + #13#10 +
-        WizardDirValue() + #13#10#13#10 +
-        'Choose a folder you own (the default one always works), or close Setup, run it again and ' +
-        'pick "Install for all users".', mbError, MB_OK);
+      MsgBox(FmtMessage(CustomMessage('DirNotWritableUser'), [WizardDirValue()]), mbError, MB_OK);
     Result := False;
   end;
 end;

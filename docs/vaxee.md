@@ -1,3 +1,7 @@
+<!-- lang-switcher:start -->
+🌐 **Languages:** **English** | [العربية](i18n/ar.md#sec-vaxee) | [Deutsch](i18n/de.md#sec-vaxee) | [Español](i18n/es.md#sec-vaxee) | [فارسی](i18n/fa.md#sec-vaxee) | [Français](i18n/fr.md#sec-vaxee) | [עברית](i18n/he.md#sec-vaxee) | [Magyar](i18n/hu.md#sec-vaxee) | [日本語](i18n/ja.md#sec-vaxee) | [한국어](i18n/ko.md#sec-vaxee) | [Polski](i18n/pl.md#sec-vaxee) | [Português (Brasil)](i18n/pt-BR.md#sec-vaxee) | [Русский](i18n/ru.md#sec-vaxee) | [Svenska](i18n/sv.md#sec-vaxee) | [Türkçe](i18n/tr.md#sec-vaxee) | [Українська](i18n/uk.md#sec-vaxee) | [Tiếng Việt](i18n/vi.md#sec-vaxee) | [简体中文](i18n/zh-CN.md#sec-vaxee) | [繁體中文](i18n/zh-TW.md#sec-vaxee) | [Add a language](i18n/README.md)
+<!-- lang-switcher:end -->
+
 # VAXEE 4K/8K receivers and ZYGEN NP-01S V2
 
 ## Scope and hardware validation

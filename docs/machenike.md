@@ -1,3 +1,7 @@
+<!-- lang-switcher:start -->
+🌐 **Languages:** **English** | [العربية](i18n/ar.md#sec-machenike) | [Deutsch](i18n/de.md#sec-machenike) | [Español](i18n/es.md#sec-machenike) | [فارسی](i18n/fa.md#sec-machenike) | [Français](i18n/fr.md#sec-machenike) | [עברית](i18n/he.md#sec-machenike) | [Magyar](i18n/hu.md#sec-machenike) | [日本語](i18n/ja.md#sec-machenike) | [한국어](i18n/ko.md#sec-machenike) | [Polski](i18n/pl.md#sec-machenike) | [Português (Brasil)](i18n/pt-BR.md#sec-machenike) | [Русский](i18n/ru.md#sec-machenike) | [Svenska](i18n/sv.md#sec-machenike) | [Türkçe](i18n/tr.md#sec-machenike) | [Українська](i18n/uk.md#sec-machenike) | [Tiếng Việt](i18n/vi.md#sec-machenike) | [简体中文](i18n/zh-CN.md#sec-machenike) | [繁體中文](i18n/zh-TW.md#sec-machenike) | [Add a language](i18n/README.md)
+<!-- lang-switcher:end -->
+
 # Machenike L7 Arctic / L7 Mix
 
 Verified on an L7 Arctic which identifies as **L7 Mix**:

@@ -1,3 +1,7 @@
+<!-- lang-switcher:start -->
+🌐 **Languages:** **English** | [العربية](i18n/ar.md#sec-ardor-fury-v2) | [Deutsch](i18n/de.md#sec-ardor-fury-v2) | [Español](i18n/es.md#sec-ardor-fury-v2) | [فارسی](i18n/fa.md#sec-ardor-fury-v2) | [Français](i18n/fr.md#sec-ardor-fury-v2) | [עברית](i18n/he.md#sec-ardor-fury-v2) | [Magyar](i18n/hu.md#sec-ardor-fury-v2) | [日本語](i18n/ja.md#sec-ardor-fury-v2) | [한국어](i18n/ko.md#sec-ardor-fury-v2) | [Polski](i18n/pl.md#sec-ardor-fury-v2) | [Português (Brasil)](i18n/pt-BR.md#sec-ardor-fury-v2) | [Русский](i18n/ru.md#sec-ardor-fury-v2) | [Svenska](i18n/sv.md#sec-ardor-fury-v2) | [Türkçe](i18n/tr.md#sec-ardor-fury-v2) | [Українська](i18n/uk.md#sec-ardor-fury-v2) | [Tiếng Việt](i18n/vi.md#sec-ardor-fury-v2) | [简体中文](i18n/zh-CN.md#sec-ardor-fury-v2) | [繁體中文](i18n/zh-TW.md#sec-ardor-fury-v2) | [Add a language](i18n/README.md)
+<!-- lang-switcher:end -->
+
 # ARDOR GAMING Fury V2 (1D57:FA60)
 
 The 2.4 GHz receiver exposes HID usage page `000A`, usage `0000`, and a

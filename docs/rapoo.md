@@ -1,3 +1,7 @@
+<!-- lang-switcher:start -->
+🌐 **Languages:** **English** | [العربية](i18n/ar.md#sec-rapoo) | [Deutsch](i18n/de.md#sec-rapoo) | [Español](i18n/es.md#sec-rapoo) | [فارسی](i18n/fa.md#sec-rapoo) | [Français](i18n/fr.md#sec-rapoo) | [עברית](i18n/he.md#sec-rapoo) | [Magyar](i18n/hu.md#sec-rapoo) | [日本語](i18n/ja.md#sec-rapoo) | [한국어](i18n/ko.md#sec-rapoo) | [Polski](i18n/pl.md#sec-rapoo) | [Português (Brasil)](i18n/pt-BR.md#sec-rapoo) | [Русский](i18n/ru.md#sec-rapoo) | [Svenska](i18n/sv.md#sec-rapoo) | [Türkçe](i18n/tr.md#sec-rapoo) | [Українська](i18n/uk.md#sec-rapoo) | [Tiếng Việt](i18n/vi.md#sec-rapoo) | [简体中文](i18n/zh-CN.md#sec-rapoo) | [繁體中文](i18n/zh-TW.md#sec-rapoo) | [Add a language](i18n/README.md)
+<!-- lang-switcher:end -->
+
 # Rapoo mouse battery support
 
 ## Why the original program missed the mouse
