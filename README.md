@@ -38,9 +38,9 @@ Battery levels of your wireless mouse, headset, keyboard and controller, right o
 - **Several monitors:** the widget shows on every monitor's taskbar, next to its clock, so it stays visible while a game runs fullscreen. *Show the widget on* in the menu picks *All monitors*, *Main monitor only*, or one display (e.g. only *Display 3*).
 - **More display options:** *Icons above percentages* stacks each icon over its level to save width; *Brand colors* shows known brands in their color (Razer green, HyperX red, ...) with a small level bar; two devices of the same kind get a tiny caption so they can be told apart; left and right taskbars get a column of devices.
 - **Languages:** English, العربية, Deutsch, Español, فارسی, Français, עברית, 日本語, 한국어, Magyar, Polski, Português (Brasil), Русский, Svenska, Tiếng Việt, Türkçe, Українська, 简体中文 and 繁體中文. The app follows the Windows display language; *Language* in the menu picks another one. See [Translations](#translations) to add or improve a language.
-- **Brand colors:** devices of 15 known brands get their maker's color, with a soft glow and a thin level bar under the
+- **Brand colors:** devices of 16 known brands get their maker's color, with a soft glow and a thin level bar under the
   percentage: Razer green, Logitech blue, SteelSeries orange, Corsair yellow, HyperX / ROG / ZOWIE red, PlayStation,
-  Xbox, Samsung, Apple, Jabra, JBL, Cooler Master and Steam. Each color has a dark- and a light-taskbar shade. The brand
+  Xbox, Samsung, Apple, Jabra, JBL, Cooler Master, Steam and Wobkey. Each color has a dark- and a light-taskbar shade. The brand
   comes from the driver that found the device, then the vendor ID, then the name; colors and rules are in
   `src/brands.cpp`. Turn it off with *Brand colors* in the menu.
 
@@ -120,6 +120,7 @@ Redragon M602-KS battery percentage was verified on the 2.4 GHz receiver (`258A:
 | **Keychron keyboards** | K5 Max (`3434:0A50`, tested) on the Keychron Link receiver (`3434:D030`) or USB cable; other Keychron QMK wireless keyboards once built with the same patch | Raw HID on `FF60:0061`: `B2` asks the receiver which keyboard is linked, `A4` returns level, voltage and charging. **Needs patched keyboard firmware:** see [docs/keychron_keyboard_firmware/README.md](docs/keychron_keyboard_firmware/README.md). Stock firmware only reports over Bluetooth |
 | **CHERRY** | MX 3.0S Wireless keyboard on its 2.4 GHz dongle (`046A:00EA`, tested) or USB cable (`046A:00E3`, tested) | Vendor HID query `1A` on `FF1C:0092` (read-only), with USB-powered state. Bluetooth is covered by the Bluetooth support |
 | **CHERRY** | Cherry XTRFY wireless mouse on the 1K receiver (`046A:0330`, tested) | CompX 17-byte battery protocol (`08 03` link status, `08 04` GetPower), same framing as the Corsair Sabre V2 Pro (read-only) |
+| **Wobkey** | Rainy75 V2 keyboard on its 2.4 GHz receiver (`36B0:3071`, tested) or USB cable (`36B0:3075`, tested) | Passive `0xBB` battery telemetry every ~5 s on `FF60:0061` (read-only), with charging state |
 | **Arbiter Studio** | Akitsu (`373E:000A` 8K receiver, `373E:0009` cable), Akitsu 3950 (`373E:0039` 8K receiver, `373E:0038` cable), Akitsu Medium (`373E:0067` 8K receiver and `373E:0066` cable, both tested) | Read-only vendor feature report `0x83` on `FFFF:0000` from Arbiter Web HUB (battery and charging) |
 | **LAMZU** | Maya X, Maya, Maya M, Tachi, Inca, Paro, Thorn, Atlantis Mini / OG Champion, Orcus (cable, 1K and 4K/8K dongles) | Vendor feature report from LAMZU Aurora |
 | **Endgame Gear** | OP1w 4k (v1 / v2), XM2w 4k (v1 / v2) on the 4K dongle; XM2we on its original receiver (`3367:1961`) | Vendor feature report `A1`, battery command `B4` (read-only) |
