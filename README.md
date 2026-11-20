@@ -380,6 +380,27 @@ No extra HID library is needed (hidraw is used directly).
 ./wireless-battery --quit     # close the running tray instance
 ```
 
+The Linux port can also be built with the modular CMake project (CMake 3.16+ and a C++17 compiler):
+
+```sh
+cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Release
+cmake --build build-cmake
+ctest --test-dir build-cmake --output-on-failure
+DESTDIR=/tmp/stage cmake --install build-cmake --prefix /usr
+```
+
+`cmake --install` places the binary, desktop launcher, icon and license under the prefix; the udev
+rule is a separate `Udev` component. To create DEB / RPM / TGZ packages (requires `dpkg-deb` and
+`rpmbuild` for the respective generators):
+
+```sh
+cpack --config build-cmake/CPackConfig.cmake -B dist
+```
+
+Version and channel are overridable with `-DWB_VERSION=1.2.3 -DWB_CHANNEL=stable|test|dev`
+(defaults: `1.0.0` / `stable`). GitHub Actions builds, tests and packages the Linux port on every
+push and pull request via `.github/workflows/cmake-linux.yml`.
+
 HID access needs a udev rule, otherwise the app starts but finds no devices:
 
 ```sh
