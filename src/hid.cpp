@@ -28,16 +28,26 @@ std::vector<HidColl> EnumHid() {
         det->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
         if (!SetupDiGetDeviceInterfaceDetailW(di, &ifd, det, need, nullptr, nullptr)) continue;
         HANDLE h = CreateFileW(det->DevicePath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
-        if (h == INVALID_HANDLE_VALUE) continue;
+        DWORD err = h == INVALID_HANDLE_VALUE ? GetLastError() : 0;
+        if (h == INVALID_HANDLE_VALUE && err != ERROR_SHARING_VIOLATION) continue;
         HidColl c;
         c.path = det->DevicePath;
-        HIDD_ATTRIBUTES a{ sizeof(a) };
-        if (HidD_GetAttributes(h, &a)) { c.vid = a.VendorID; c.pid = a.ProductID; }
-        PHIDP_PREPARSED_DATA pp;
-        if (HidD_GetPreparsedData(h, &pp)) { HidP_GetCaps(pp, &c.caps); HidD_FreePreparsedData(pp); }
-        CloseHandle(h);
         std::wstring lower = c.path;
         for (auto& ch : lower) ch = towlower(ch);
+        if (h != INVALID_HANDLE_VALUE) {
+            HIDD_ATTRIBUTES a{ sizeof(a) };
+            if (HidD_GetAttributes(h, &a)) { c.vid = a.VendorID; c.pid = a.ProductID; }
+            PHIDP_PREPARSED_DATA pp;
+            if (HidD_GetPreparsedData(h, &pp)) { HidP_GetCaps(pp, &c.caps); HidD_FreePreparsedData(pp); }
+            CloseHandle(h);
+        } else {
+            // Exclusive lock held by a vendor UWP app (e.g. Astro Command Center): recover VID/PID from path.
+            size_t v = lower.find(L"vid_");
+            size_t p = lower.find(L"pid_");
+            if (v != std::wstring::npos) c.vid = (USHORT)wcstoul(lower.c_str() + v + 4, nullptr, 16);
+            if (p != std::wstring::npos) c.pid = (USHORT)wcstoul(lower.c_str() + p + 4, nullptr, 16);
+            if (!c.vid || !c.pid) continue;
+        }
         size_t mi = lower.find(L"&mi_");
         if (mi != std::wstring::npos) c.iface = (int)wcstol(lower.c_str() + mi + 4, nullptr, 16);
         out.push_back(std::move(c));
