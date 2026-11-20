@@ -383,10 +383,15 @@ No extra HID library is needed (hidraw is used directly).
 HID access needs a udev rule, otherwise the app starts but finds no devices:
 
 ```sh
-sudo cp linux/99-wireless-battery.rules /etc/udev/rules.d/
+sudo cp linux/70-wireless-battery.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
 # log out and back in
 ```
+
+If you previously installed `99-wireless-battery.rules`, remove the old
+file from `/etc/udev/rules.d/` before reloading the rules. The `70-`
+prefix ensures that `uaccess` is applied before systemd's
+`73-seat-late.rules` assigns device permissions.
 
 The tray icon works natively on KDE Plasma; GNOME needs an AppIndicator host such as
 `gnome-shell-extension-appindicator`. The optional launcher is `linux/wireless-battery.desktop`
