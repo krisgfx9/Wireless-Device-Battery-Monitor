@@ -27,3 +27,6 @@ std::vector<DeviceStatus> PollAllDevices();
 
 // Prints every HID collection (for adding support for new devices).
 std::wstring DumpHidCollections();
+
+// Releases background driver sessions (e.g. AAP channels) cleanly before exit.
+void ShutdownDevices();

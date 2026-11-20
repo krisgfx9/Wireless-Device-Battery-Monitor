@@ -1103,6 +1103,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             widget::Destroy();
             SetEvent(g_stopEvt);
             if (g_worker) WaitForSingleObject(g_worker, 5000);
+            ShutdownDevices();
             for (auto& [k, e] : g_entries) {
                 if (e.added) TrayDelete(e.uid);
                 if (e.icon) DestroyIcon(e.icon);
@@ -1170,6 +1171,7 @@ int ListToConsole(bool dump) {
         if (s.millivolts) line += L", " + std::to_wstring(s.millivolts) + L" mV";
         write(line + L"   (" + s.key + L")\n");
     }
+    ShutdownDevices();
     return 0;
 }
 
@@ -1185,6 +1187,7 @@ int ListJson() {
         DWORD written = 0;
         WriteFile(out, text.data(), (DWORD)text.size(), &written, nullptr);
     }
+    ShutdownDevices();
     return 0;
 }
 

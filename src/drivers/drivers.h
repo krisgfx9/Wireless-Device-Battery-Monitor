@@ -150,7 +150,9 @@ void PollGameSirSapjoy(PollContext& ctx);  // Tarantula Pro / NovaPro (Super Nov
 void PollGameSirBle(PollContext& ctx);  // Cyclone Pro on its dongle (3537:1015), battery over Bluetooth LE
 void Poll8BitDo(PollContext& ctx);     // Ultimate 2 Wireless in D-input mode (2DC8:6012)
 void PollBeitong(PollContext& ctx);    // BEITONG KP20 / KP40D on their 2.4 GHz receivers (20BC:5128, 20BC:515C, XInput mode)
-void PollAirPods(PollContext& ctx);   // Apple AirPods / Beats (BLE proximity broadcasts)
+void PollAirPods(PollContext& ctx);   // Apple AirPods / Beats (AAP L2CAP 1% via bridge driver, or BLE fallback)
+void ShutdownAirPods();
+std::wstring DumpAirPodsStatus();
 void PollPhoneLink(PollContext& ctx);  // phone linked with Microsoft Phone Link (reads its Start menu card)
 void PollGalaxyBuds(PollContext& ctx); // Samsung Galaxy Buds (Bluetooth RFCOMM, not HID)
 void PollNothingEar(PollContext& ctx); // Nothing / CMF Ear earbuds (Bluetooth RFCOMM NT Link, not HID)
