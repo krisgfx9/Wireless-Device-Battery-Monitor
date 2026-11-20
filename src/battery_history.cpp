@@ -1,5 +1,6 @@
 #include "battery_history.h"
 #include "history_model.h"
+#include "demo_history.h"
 #include "runtime_estimate.h"
 #include "i18n.h"
 
@@ -106,24 +107,10 @@ void Load() {
     if (data != g_store.Serialize()) Rewrite(); // remove expired/malformed/incomplete records at startup
 }
 
-std::vector<Sample> DemoSamples(int64_t now) {
-    // Only for --demo UI previews, never added to g_store or persisted.
-    std::vector<Sample> points;
-    const int64_t start = now - 30 * kSecondsPerDay;
-    for (int i = 0; i <= 720; i += 3) {
-        const int cycleHour = (i + 60) % 120; // five-day discharge/recharge cycle
-        const bool charging = cycleHour >= 108 && cycleHour <= 114;
-        int pct = cycleHour < 108 ? 96 - cycleHour / 2 :
-                  cycleHour == 108 ? 60 : cycleHour == 111 ? 78 : 96;
-        points.push_back({g_key, start + static_cast<int64_t>(i) * 3600, pct, charging});
-    }
-    return points;
-}
-
 std::vector<Sample> Visible(int64_t now) {
     const int64_t since = now - static_cast<int64_t>(g_days) * kSecondsPerDay;
     if (!g_demo) return g_store.For(g_key, since, now);
-    auto points = DemoSamples(now);
+    auto points = DemoSamples(g_key, now);
     points.erase(std::remove_if(points.begin(), points.end(), [since](const Sample& s) {
         return s.timestamp < since;
     }), points.end());
@@ -295,7 +282,7 @@ void Paint(HWND w) {
     const int64_t now = UtcNow();
     const auto points = Visible(now);
     const Stats stats = Summarize(points);
-    const auto forecastPoints = g_demo ? DemoSamples(now) : g_store.For(g_key, now - kRetentionSeconds, now);
+    const auto forecastPoints = g_demo ? DemoSamples(g_key, now) : g_store.For(g_key, now - kRetentionSeconds, now);
     const RuntimeEstimate forecast = EstimateRuntime(forecastPoints, now);
 
     // Headline and a separate subtitle row: they never overlap statistic cards.
@@ -565,6 +552,13 @@ void Observe(const std::wstring& key, int percent, bool charging) {
         Append(s);
         if (g_view && key == g_key) InvalidateRect(g_view, nullptr, FALSE);
     }
+}
+
+std::wstring EstimatedRuntimeText(const std::wstring& key) {
+    if (key.empty()) return {};
+    const int64_t now = UtcNow();
+    const auto samples = g_demo ? DemoSamples(key, now) : g_store.For(key, now - kRetentionSeconds, now);
+    return CompactRuntimeText(EstimateRuntime(samples, now));
 }
 
 void Show(HWND owner, const std::wstring& key, const std::wstring& displayName) {

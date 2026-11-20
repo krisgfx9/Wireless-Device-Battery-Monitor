@@ -44,6 +44,8 @@ test: test-update-core test-update-win test-update-signature
 	./build/history_model_test.exe
 	$(CXX) -std=c++17 -O2 -Wall -Wextra tests/runtime_estimate_test.cpp -o build/runtime_estimate_test.exe
 	./build/runtime_estimate_test.exe
+	$(CXX) -std=c++17 -O2 -Wall -Wextra tests/demo_history_test.cpp -o build/demo_history_test.exe
+	./build/demo_history_test.exe
 	$(CXX) $(CXXFLAGS) tests/aula_mouse_driver_test.cpp src/drivers/aula_mouse.cpp -o build/aula_mouse_driver_test.exe
 	./build/aula_mouse_driver_test.exe
 	$(CXX) $(CXXFLAGS) tests/darkrim_driver_test.cpp src/drivers/darkrim.cpp -o build/darkrim_driver_test.exe

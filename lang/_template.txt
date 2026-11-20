@@ -73,6 +73,7 @@ Could not save history changes. =
 Hide last known / asleep devices = 
 Show disconnected devices =
 Record battery history =
+Show estimated time instead of % (when available) =
 Show on the taskbar (icon + percentage) = 
 Show as tray icons = 
 Background behind taskbar text (for transparent taskbars) = 
