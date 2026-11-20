@@ -1,7 +1,7 @@
 #pragma once
-// A small transparent strip on the taskbar, just left of the notification area, showing
+// A small transparent strip on the taskbar showing
 // "[icon] 30%  [icon] 93%". Implemented as a layered child window of the taskbar (Shell_TrayWnd), with a
-// copy on each secondary-monitor taskbar (Shell_SecondaryTrayWnd) next to its clock.
+// copy on each configured secondary-monitor taskbar (Shell_SecondaryTrayWnd).
 #include <windows.h>
 #include <string>
 #include <vector>
@@ -22,10 +22,15 @@ struct WidgetItem {
 };
 
 namespace widget {
+enum class TaskbarPosition { SystemTray, LeftSide };
+
 // Creates the widget on the primary taskbar. Clicks are reported by posting `clickMsg` to `notifyWnd`.
 bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme);
 void Destroy();
 bool Alive();
+// True when at least one strip is placed. Auto-hidden taskbars still count.
+bool HasPlacedStrip();
+void SetPosition(TaskbarPosition position);
 void SetItems(const std::vector<WidgetItem>& items, const std::wstring& tooltip);
 void SetLightTheme(bool light);
 // Draws a rounded plate in the taskbar's colours behind the text (kept across Create/Destroy).

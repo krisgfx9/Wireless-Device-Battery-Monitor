@@ -50,6 +50,8 @@ test: test-update-core test-update-win test-update-signature
 	./build/darkrim_driver_test.exe
 	$(CXX) $(CXXFLAGS) tests/nuphy_driver_test.cpp src/drivers/nuphy.cpp -o build/nuphy_driver_test.exe
 	./build/nuphy_driver_test.exe
+	$(CXX) $(CXXFLAGS) tests/nuphy_protocol_test.cpp -o build/nuphy_protocol_test.exe
+	./build/nuphy_protocol_test.exe
 	$(CXX) $(CXXFLAGS) tests/maono_driver_test.cpp src/drivers/maono.cpp -o build/maono_driver_test.exe
 	./build/maono_driver_test.exe
 	$(CXX) $(CXXFLAGS) tests/astro_driver_test.cpp src/drivers/astro.cpp -o build/astro_driver_test.exe

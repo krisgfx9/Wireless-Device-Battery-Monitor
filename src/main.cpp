@@ -46,6 +46,7 @@ constexpr UINT ALERT_ICON_ID = 2;
 enum MenuId : UINT {
     ID_REFRESH = 100, ID_AUTOSTART, ID_HIDE_LAST_KNOWN, ID_WIDGET_BACKGROUND, ID_EXIT, ID_MODE_WIDGET, ID_MODE_TRAY, ID_SUPPORT, ID_REPORT,
     ID_BRAND_COLORS, ID_STACKED, ID_SHOW_DISCONNECTED, ID_RECORD_HISTORY,
+    ID_POSITION_LEFT, ID_POSITION_TRAY,
     ID_POLL_FIRST = 500,  // "Check battery every": ID_POLL_FIRST + 0..7
     ID_UPDATE = 200, ID_AUTO_UPDATE,
     ID_LANG_AUTO = 400, ID_LANG_ADD, ID_LANG_FIRST,  // "Language": ID_LANG_FIRST + 0..63
@@ -76,6 +77,7 @@ bool g_recordHistory = true;  // save readings for "Battery history..." (menu op
 std::wstring g_widgetMonitor = L"all";  // which taskbars show the widget: "all", "main" or one monitor id
 bool g_widgetBackground = false;  // draw a plate behind the taskbar text (transparent taskbar themes)
 bool g_stacked = false;      // icon above the percentage (menu option)
+widget::TaskbarPosition g_taskbarPosition = widget::TaskbarPosition::SystemTray;
 bool g_brandColors = false;  // off by default; known brands get their color (Razer green, Logitech blue, ...)
 std::atomic<DWORD> g_pollIntervalMs{ 60 * 1000 };  // set from the menu, read by the worker thread
 
@@ -574,7 +576,7 @@ std::vector<TrayEntry*> OrderedEntries(bool shownOnly) {
 }
 
 void UpdateWidget() {
-    if (!g_useWidget) return;
+    if (!widget::Alive()) return;
     std::vector<TrayEntry*> list = OrderedEntries(true);
     // Two devices of one kind share an icon: give each a tiny caption so they can be told apart.
     std::vector<LabelInput> labelIn;
@@ -654,22 +656,31 @@ void OnResults(std::vector<DeviceStatus>& results) {
 // widget cannot be created (e.g. Explorer not ready yet). Called once a second.
 void Reconcile() {
     bool alive = g_wantWidget && widget::Alive();
-    if (g_wantWidget && !alive) alive = widget::Create(g_inst, g_hwnd, WM_WIDGET_CLICK, g_lightTaskbar);
+    if (g_wantWidget && !alive) {
+        alive = widget::Create(g_inst, g_hwnd, WM_WIDGET_CLICK, g_lightTaskbar);
+        if (alive) UpdateWidget();
+    } else if (alive) {
+        widget::Reposition();
+    }
     if (!g_wantWidget) widget::Destroy();
-    bool changed = alive != g_useWidget;
-    g_useWidget = alive;
-    if (changed) {
+    bool useWidget = alive && (g_taskbarPosition == widget::TaskbarPosition::SystemTray || widget::HasPlacedStrip());
+    if (useWidget != g_useWidget) {
+        g_useWidget = useWidget;
         for (auto& [k, e] : g_entries) ApplyEntry(e);
         UpdatePlaceholder();
-        UpdateWidget();
-    } else if (g_useWidget) {
-        widget::Reposition();
     }
 }
 
 void SetMode(bool useWidget) {
     g_wantWidget = useWidget;
     SaveWidgetMode(useWidget);
+    Reconcile();
+}
+
+void SetTaskbarPosition(widget::TaskbarPosition position) {
+    g_taskbarPosition = position;
+    SaveBoolSetting(L"TaskbarPosition", position == widget::TaskbarPosition::LeftSide);
+    widget::SetPosition(position);
     Reconcile();
 }
 
@@ -855,6 +866,13 @@ void ShowMenu() {
     AppendMenuW(m, MF_STRING | (g_wantWidget ? MF_CHECKED : 0), ID_MODE_WIDGET, T(L"Show on the taskbar (icon + percentage)"));
     AppendMenuW(m, MF_STRING | (!g_wantWidget ? MF_CHECKED : 0), ID_MODE_TRAY, T(L"Show as tray icons"));
     CheckMenuRadioItem(m, ID_MODE_WIDGET, ID_MODE_TRAY, g_wantWidget ? ID_MODE_WIDGET : ID_MODE_TRAY, MF_BYCOMMAND);
+    if (HMENU sub = CreatePopupMenu()) {
+        AppendMenuW(sub, MF_STRING, ID_POSITION_LEFT, T(L"Left side"));
+        AppendMenuW(sub, MF_STRING, ID_POSITION_TRAY, T(L"System tray"));
+        UINT checked = g_taskbarPosition == widget::TaskbarPosition::LeftSide ? ID_POSITION_LEFT : ID_POSITION_TRAY;
+        CheckMenuRadioItem(sub, ID_POSITION_LEFT, ID_POSITION_TRAY, checked, MF_BYCOMMAND);
+        AppendMenuW(m, MF_POPUP | (g_wantWidget ? 0 : MF_GRAYED), (UINT_PTR)sub, T(L"Taskbar position"));
+    }
     UINT bgFlags = MF_STRING | (g_widgetBackground ? MF_CHECKED : 0) | (g_wantWidget ? 0 : MF_GRAYED);
     AppendMenuW(m, bgFlags, ID_WIDGET_BACKGROUND, T(L"Background behind taskbar text (for transparent taskbars)"));
     AppendMenuW(m, MF_STRING | (g_stacked ? MF_CHECKED : 0) | (g_wantWidget ? 0 : MF_GRAYED), ID_STACKED, T(L"Icons above percentages (narrower)"));
@@ -946,6 +964,8 @@ void ShowMenu() {
         case ID_STACKED: SetStacked(!g_stacked); break;
         case ID_MODE_WIDGET: SetMode(true); break;
         case ID_MODE_TRAY: SetMode(false); break;
+        case ID_POSITION_LEFT: SetTaskbarPosition(widget::TaskbarPosition::LeftSide); break;
+        case ID_POSITION_TRAY: SetTaskbarPosition(widget::TaskbarPosition::SystemTray); break;
         case ID_SUPPORT: ShellExecuteW(nullptr, L"open", L"https://github.com/sponsors/krisgfx9", nullptr, nullptr, SW_SHOWNORMAL); break;
         case ID_REPORT: report::Show(g_inst, g_hwnd); break;
         case ID_UPDATE: updates::Activate(g_hwnd); break;
@@ -1263,6 +1283,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     g_refreshEvt = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     g_stopEvt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_wantWidget = LoadWidgetMode();
+    if (LoadBoolSetting(L"TaskbarPosition", false)) g_taskbarPosition = widget::TaskbarPosition::LeftSide;
+    widget::SetPosition(g_taskbarPosition);
     g_hideLastKnown = LoadHideLastKnown();
     g_showDisconnectedDevices = LoadShowDisconnectedDevices();
     g_recordHistory = LoadRecordHistory();
