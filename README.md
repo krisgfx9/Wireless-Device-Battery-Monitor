@@ -107,7 +107,7 @@ Redragon M602-KS battery percentage was verified on the 2.4 GHz receiver (`258A:
 | **HyperX** | Cloud III Wireless, Cloud III S Wireless, Cloud II Wireless (HP, Kingston, DTS), Cloud II Core Wireless, Cloud Alpha Wireless, Cloud Alpha 2 Wireless, Cloud Flight (`03F0:0C8C` for PS, untested), Cloud Flight S, Cloud Stinger Core Wireless (including DTS `03F0:0A8E`, tested), Cloud Core Wireless DTS, Pulsefire Haste 2 Core Wireless (2.4 GHz dongle), Pulsefire Haste 2 Wireless, Pulsefire Haste 2 Mini (2.4 GHz dongle) (2.4 GHz dongle `03F0:0F98`, tested; `0D97` untested) | Vendor HID reports (Haste 2: [protocol notes](docs/hyperx_haste_2.md)) |
 | **Glorious** | Model O / O- / D / D- Wireless, Model O 2 / D 2 PRO | Vendor feature report |
 | **Hitscan** | Hyperlight X, Hyperlight N | Vendor feature report (same protocol as Glorious) |
-| **Kysona / Pulsar / ATK (VXE) / Hitscan** | Kysona M600 / Mercury, Pulsar and ATK VXE wireless mice (e.g. VXE X3 Pro, VXE Dragonfly R1 / R1 Pro Max / R1 SE+, ATK F1 Extreme), Hitscan Hyperlight, Chimera V2 (receiver 3554:F512) | Shared vendor protocol with checksummed replies |
+| **Kysona / Pulsar / ATK (VXE) / Hitscan** | Kysona M600 / Mercury, Pulsar and ATK VXE wireless mice (e.g. VXE X3 Pro, VXE Dragonfly R1 / R1 Pro Max / R1 SE+, ATK F1 Extreme), Hitscan Hyperlight, Chimera V2 (receiver 3554:F512), Zaopin 8K receiver (`3554:F527`, tested; [measured frames](docs/zaopin_8k_receiver.md)) | Shared vendor protocol with checksummed replies |
 | **Pulsar X2 V3** | X2 V3 on the 1K dongle (`3710:5402`) or USB cable (`3710:3402`); X2 V3 eS on the 8K dongle (`3710:5403`) or USB cable (`3710:3406`) | 64-byte vendor feature report, battery register `08 81 01` (read-only) |
 | **ATK / VXE NK** | VXE R1 NK and other NearLink mice on the NK mouse NANO dongle (`373B:1216`) | ATK BITMOUSE output report 08 on `FF05:0001` (battery and charging) |
 | **ATK Zero** | USB cable (`373B:1154`) and 8K L0 / L1 receivers (`373B:124F` / `373B:1155`) on Windows | 64-byte ATK BITMOUSE report 08 on `FF05:0001` (battery on both links, charging over the cable) |
@@ -134,6 +134,7 @@ Redragon M602-KS battery percentage was verified on the 2.4 GHz receiver (`258A:
 | **Finalmouse** | UltralightX on its 2.4 GHz dongle (`361D:0100`, tested); Starlight X on its dongle (`361D:0300` / `0301`, tested). Not on the mouse's own cable | xpanel vendor reports on `FF00`: read-only GETs, then *wake/all* (`0xE0`); battery voltage on xpanel's curve, or the Starlight X's own percentage, plus charging state |
 | **Scyrox** | V12M on its 2.4 GHz receiver (`395A:0006`) | S-Center 2.0 profile read (output report `08`, command `01`) on `FF00:0002`; battery only, no charging state |
 | **HECATE** | G5M PRO and other HECATE mice on the same receiver, and USB cable `35BB:D3FA / D3FC / D3FD` | Kysona protocol |
+| **Rongyuan / ROYUAN GX keyboards** | MonsGeek 2.4G Wireless Keyboard (`3151:4011`, tested; [measured frames](docs/royuan_2.4g_keyboard.md)) and the receivers listed below | Dongle status `F7` on `FFFF:0002`: level in byte 2. **Byte 4 is not an offline flag on this firmware** and the charging byte is not usable, so only the level is read |
 | **Redragon** | Compx-based wireless mice: M916 Pro 1K (tested), M913 Impact Elite (tri-mode), G49 (receiver or cable) | Kysona protocol (the Areson `25A7` receivers are listed under Areson) |
 | **Taidu (钛度)** | TSG808 on its Compx 2.4 GHz receiver `3554:F5D5` (tested) | Kysona protocol |
 | **Areson (Redragon)** | M915RGB-WL (tested), original M913 Impact Elite and other mice on the `25A7:FA07` / `FA08` receiver | 17-byte `GetPower` feature report; level in 10% steps and a charging flag |
@@ -220,6 +221,8 @@ These reports cover the listed connection modes and behaviors; battery confirmat
 - MOONDROP GM01 Pro (dongle `35D8:0133`)
 - SteelSeries Arctis Nova Pro Wireless (base station `1038:225D`; battery reading tested, charging and power transitions untested)
 - Delux M800 Pro (receiver `248A:5B2F`)
+- Compx 2.4G Wireless 8K Receiver (receiver `3554:F527`, paired with a Zaopin Z2 Mini; level, charging flag and millivolts read)
+- ROYUAN MonsGeek 2.4G Wireless Keyboard dongle (`3151:4011`, paired with a MonsGeek M5W; level read, charging not usable on this firmware)
 - Razer Barracuda X (2022) (receiver `1532:0550`; battery level read, charging transitions untested)
 - Razer BlackShark V3 X (HyperSpeed dongle `1532:057D`)
 - Fantech Helios Go XD5 (dongle `25A7:FA7C`)
