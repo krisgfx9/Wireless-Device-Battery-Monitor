@@ -56,6 +56,8 @@ test: test-update-core test-update-win test-update-signature
 	./build/astro_driver_test.exe
 	$(CXX) $(CXXFLAGS) tests/steelseries_mouse_test.cpp src/drivers/steelseries.cpp -o build/steelseries_mouse_test.exe
 	./build/steelseries_mouse_test.exe
+	$(CXX) $(CXXFLAGS) tests/pulsar_feinmann_test.cpp src/drivers/pulsar.cpp -o build/pulsar_feinmann_test.exe
+	./build/pulsar_feinmann_test.exe
 	$(CXX) -std=c++17 -O2 -Wall tests/rapoo_protocol_test.cpp -o build/rapoo_protocol_test.exe
 	./build/rapoo_protocol_test.exe
 	$(CXX) $(CXXFLAGS) tests/rapoo_driver_test.cpp src/drivers/rapoo.cpp -o build/rapoo_driver_test.exe

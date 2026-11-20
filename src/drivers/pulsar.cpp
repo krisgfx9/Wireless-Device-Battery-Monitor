@@ -16,6 +16,11 @@
 //   higher interfaces are tried first.
 //   No reliable charging register: on the cable the mouse is charging; 0% from a dongle means the
 //   mouse is off or out of range.
+// Feinmann FO1 8K (`3710:5404`, issue #3753) uses the same Sonix feature-report
+// battery query `08 81 01` on interface 3 (FFFF:0001, 65/65/65 bytes).
+// Captured and verified on real hardware in
+// github.com/packerlschupfer/pulsar-mouse-linux (drivers/feinmann8k.py).
+// The similarly named Feinmann F01 Noctua Edition uses a DIFFERENT Nordic protocol.
 #include "drivers.h"
 
 #include <algorithm>
@@ -30,6 +35,7 @@ const Product kProducts[] = {
     { 0x3406, true, L"Pulsar X2 V3 eS" },
     { 0x5402, false, nullptr },  // 1K dongle
     { 0x5403, false, nullptr },  // 8K dongle
+    { 0x5404, false, L"Pulsar Feinmann FO1" },  // dedicated Feinmann 8K dongle (#3753)
 };
 
 enum class Reply { Battery, Offline, None };
@@ -70,7 +76,14 @@ Reply ReadBattery(HidDev& d, int& pct) {
 void PollPulsar(PollContext& ctx) {
     for (const Product& prod : kProducts) {
         if (ctx.IsClaimed(kVid, prod.pid)) continue;
-        auto colls = ctx.Find(kVid, prod.pid, [](const HidColl& c) { return c.featLen() >= 65; });
+        auto colls = ctx.Find(kVid, prod.pid, [&prod](const HidColl& c) {
+            if (c.featLen() < 65) return false;
+            if (prod.pid != 0x5404) return true;
+            // The FO1 dongle exposes two FFFF collections; only interface 3 is the
+            // documented 64-byte feature-report control channel.
+            return c.iface == 3 && c.page() == 0xFFFF && c.usage() == 0x0001 &&
+                   c.inLen() == 65 && c.outLen() == 65;
+        });
         std::sort(colls.begin(), colls.end(), [](const HidColl* a, const HidColl* b) { return a->iface > b->iface; });
         for (const HidColl* c : colls) {
             HidDev d;
@@ -89,7 +102,8 @@ void PollPulsar(PollContext& ctx) {
                 std::wstring n = HidProduct(*c);
                 bool generic = n.empty() || n.find(L"Dongle") != std::wstring::npos ||
                                n.find(L"Receiver") != std::wstring::npos;
-                s.name = generic ? L"Pulsar wireless mouse" : n;  // the dongles are shared by several models
+                // 5404 is specific to Feinmann FO1; 5402/5403 are shared receivers.
+                s.name = prod.name ? prod.name : (generic ? L"Pulsar wireless mouse" : n);
                 s.via = L"2.4 GHz receiver";
                 s.connected = rep == Reply::Battery && pct > 0;
             }
