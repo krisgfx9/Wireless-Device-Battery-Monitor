@@ -18,6 +18,7 @@
 #include "device_aliases.h"
 #include "alert_rules.h"
 #include "devices.h"
+#include "drivers/drivers.h"
 #include "battery_history.h"
 #include "i18n.h"
 #include "json_output.h"
@@ -951,7 +952,7 @@ void ShowMenu() {
     PostMessageW(g_hwnd, WM_NULL, 0, 0);
     DestroyMenu(m);
     switch (cmd) {
-        case ID_REFRESH: SetEvent(g_refreshEvt); break;
+        case ID_REFRESH: G435RequestRead(); SetEvent(g_refreshEvt); break;
         case ID_AUTOSTART: SetAutostart(!AutostartEnabled()); break;
         case ID_HIDE_LAST_KNOWN: SetHideLastKnown(!g_hideLastKnown); break;
         case ID_SHOW_DISCONNECTED: SetShowDisconnectedDevices(!g_showDisconnectedDevices); break;
@@ -1173,6 +1174,9 @@ int ListToConsole(bool dump) {
         }
         return 0;
     }
+    // The tray defers the first G435 read so logon does not mute audio. --list is an explicit
+    // request for the current level, so read now (Realtek mutes USB audio for about a second).
+    G435RequestRead();
     auto list = PollAllDevices();
     if (list.empty()) write(L"No devices with battery info found.\n");
     for (auto& s : list) {
