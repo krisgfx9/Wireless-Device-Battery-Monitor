@@ -37,6 +37,8 @@ $stage = Join-Path $root "build\portable"
 Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $stage | Out-Null
 Copy-Item BatteryHub.exe, $hscExe, installer\THIRD_PARTY_NOTICES.txt $stage
+New-Item -ItemType Directory -Force (Join-Path $stage "lang") | Out-Null
+Copy-Item lang\*.json (Join-Path $stage "lang")
 Copy-Item LICENSE (Join-Path $stage "LICENSE.txt")
 Compress-Archive -Path "$stage\*" -DestinationPath "dist\BatteryHub-$Version-portable.zip" -Force
 # Checksums of what the app can install or users download. The maintainer signs this file on their own

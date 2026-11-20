@@ -1193,15 +1193,15 @@ int ListJson() {
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     if (cmdLine && wcsstr(cmdLine, L"--json")) return ListJson();
     if (cmdLine && wcsstr(cmdLine, L"--help")) {
-        MessageBoxW(nullptr,
-                    L"BatteryHub options:\n\n"
-                    L"--list   Print devices and battery levels\n"
-                    L"--json   Print a JSON array of devices and battery levels\n"
-                    L"--dump   Print every HID collection and device\n"
-                    L"--report Open the \"Request support for a device\" window\n"
-                    L"--demo   Show sample devices\n"
-                    L"--quit   Quit a running instance",
-                    L"BatteryHub", MB_OK | MB_ICONINFORMATION);
+        i18n::Init();
+        std::wstring help = std::wstring(T(L"BatteryHub options:")) + L"\n\n"
+            L"--list   " + T(L"Print devices and battery levels") + L"\n"
+            L"--json   " + T(L"Print a JSON array of devices and battery levels") + L"\n"
+            L"--dump   " + T(L"Print every HID collection and device") + L"\n"
+            L"--report " + T(L"Open the \"Request support for a device\" window") + L"\n"
+            L"--demo   " + T(L"Show sample devices") + L"\n"
+            L"--quit   " + T(L"Quit a running instance");
+        MessageBoxW(nullptr, help.c_str(), L"BatteryHub", MB_OK | MB_ICONINFORMATION);
         return 0;
     }
     int argc = 0;

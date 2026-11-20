@@ -1,3 +1,7 @@
+<!-- lang-switcher:start -->
+🌐 **Languages:** **English** | [العربية](i18n/ar.md#sec-inphic) | [Deutsch](i18n/de.md#sec-inphic) | [Español](i18n/es.md#sec-inphic) | [فارسی](i18n/fa.md#sec-inphic) | [Français](i18n/fr.md#sec-inphic) | [עברית](i18n/he.md#sec-inphic) | [Magyar](i18n/hu.md#sec-inphic) | [日本語](i18n/ja.md#sec-inphic) | [한국어](i18n/ko.md#sec-inphic) | [Polski](i18n/pl.md#sec-inphic) | [Português (Brasil)](i18n/pt-BR.md#sec-inphic) | [Русский](i18n/ru.md#sec-inphic) | [Svenska](i18n/sv.md#sec-inphic) | [Türkçe](i18n/tr.md#sec-inphic) | [Українська](i18n/uk.md#sec-inphic) | [Tiếng Việt](i18n/vi.md#sec-inphic) | [简体中文](i18n/zh-CN.md#sec-inphic) | [繁體中文](i18n/zh-TW.md#sec-inphic) | [Add a language](i18n/README.md)
+<!-- lang-switcher:end -->
+
 # Inphic IN10 family, KP 8K receiver
 
 The attached device, identified by its owner as IN10 MAX, enumerates as

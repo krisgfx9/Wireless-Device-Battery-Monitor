@@ -1,3 +1,7 @@
+<!-- lang-switcher:start -->
+🌐 **Languages:** **English** | [العربية](docs/i18n/ar.md#sec-readme) | [Deutsch](docs/i18n/de.md#sec-readme) | [Español](docs/i18n/es.md#sec-readme) | [فارسی](docs/i18n/fa.md#sec-readme) | [Français](docs/i18n/fr.md#sec-readme) | [עברית](docs/i18n/he.md#sec-readme) | [Magyar](docs/i18n/hu.md#sec-readme) | [日本語](docs/i18n/ja.md#sec-readme) | [한국어](docs/i18n/ko.md#sec-readme) | [Polski](docs/i18n/pl.md#sec-readme) | [Português (Brasil)](docs/i18n/pt-BR.md#sec-readme) | [Русский](docs/i18n/ru.md#sec-readme) | [Svenska](docs/i18n/sv.md#sec-readme) | [Türkçe](docs/i18n/tr.md#sec-readme) | [Українська](docs/i18n/uk.md#sec-readme) | [Tiếng Việt](docs/i18n/vi.md#sec-readme) | [简体中文](docs/i18n/zh-CN.md#sec-readme) | [繁體中文](docs/i18n/zh-TW.md#sec-readme) | [Add a language](docs/i18n/README.md)
+<!-- lang-switcher:end -->
+
 # BatteryHub
 
 *Formerly **Wireless Battery**. Version 1.1.0 renamed the app; an update keeps your settings, startup choice and battery history.*
@@ -37,7 +41,7 @@ Battery levels of your wireless mouse, headset, keyboard and controller, right o
 - **Transparent taskbar themes** (e.g. Windhawk's Taskbar Styler): turn on *Background behind taskbar text* in the menu to keep the text readable over the wallpaper.
 - **Several monitors:** the widget shows on every monitor's taskbar, next to its clock, so it stays visible while a game runs fullscreen. *Show the widget on* in the menu picks *All monitors*, *Main monitor only*, or one display (e.g. only *Display 3*).
 - **More display options:** *Icons above percentages* stacks each icon over its level to save width; *Brand colors* shows known brands in their color (Razer green, HyperX red, ...) with a small level bar; two devices of the same kind get a tiny caption so they can be told apart; left and right taskbars get a column of devices.
-- **Languages:** English, العربية, Deutsch, Español, فارسی, Français, עברית, 日本語, 한국어, Magyar, Polski, Português (Brasil), Русский, Svenska, Tiếng Việt, Türkçe, Українська, 简体中文 and 繁體中文. The app follows the Windows display language; *Language* in the menu picks another one. See [Translations](#translations) to add or improve a language.
+- **Languages:** English, العربية, Deutsch, Español, فارسی, Français, עברית, 日本語, 한국어, Magyar, Polski, Português (Brasil), Русский, Svenska, Tiếng Việt, Türkçe, Українська, 简体中文 and 繁體中文. Both the Windows and Linux apps follow the system display language; *Language* in the menu picks another one, and the Windows installer also supports all 19 languages. UI phrases live in editable static `lang/*.json` files, and complete translated documentation lives in [`docs/i18n/`](docs/i18n/README.md). See [Translations](#translations) to edit or add a language.
 - **Brand colors:** devices of 15 known brands get their maker's color, with a soft glow and a thin level bar under the
   percentage: Razer green, Logitech blue, SteelSeries orange, Corsair yellow, HyperX / ROG / ZOWIE red, PlayStation,
   Xbox, Samsung, Apple, Jabra, JBL, Cooler Master and Steam. Each color has a dark- and a light-taskbar shade. The brand
@@ -243,12 +247,12 @@ Also hardware-tested: RAWM Leviathan V4 (RAWM HS Receiver `1915:2346`; battery l
 [![Latest version](https://img.shields.io/github/v/release/krisgfx9/Wireless-Device-Battery-Monitor?label=latest%20version&style=for-the-badge)](https://github.com/krisgfx9/Wireless-Device-Battery-Monitor/releases/latest)
 
 1. Download **`BatteryHub-Setup-<version>.exe`** from the [latest release](https://github.com/krisgfx9/Wireless-Device-Battery-Monitor/releases/latest).
-2. Run it and click through. It needs **no administrator rights** and **nothing else installed**: no
-   runtimes, no drivers, no vendor apps. HeadsetControl comes bundled.
+2. Run it, choose any of the 19 supported setup languages, and click through. It needs **no administrator rights** and **nothing else installed**: no
+   runtimes, no drivers, no vendor apps. HeadsetControl comes bundled, and the editable `lang\` folder is installed next to `BatteryHub.exe`.
 
 The installer adds a Start menu entry and an uninstaller (*Settings → Apps*), and can start the app
 when you sign in. Prefer no installer? Download `BatteryHub-<version>-portable.zip`, unzip it
-anywhere and run `BatteryHub.exe`.
+anywhere (keep the `lang\` folder next to `BatteryHub.exe` for UI translations) and run `BatteryHub.exe`.
 
 **Notes:**
 - **SmartScreen warning:** the exe is not code-signed, so Windows may say "Windows protected your PC". Click *More info → Run anyway*, or build it yourself.
@@ -378,8 +382,12 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
 The tray icon works natively on KDE Plasma; GNOME needs an AppIndicator host such as
-`gnome-shell-extension-appindicator`. The optional launcher is `linux/wireless-battery.desktop`
-(install it plus `linux/wireless-battery.svg` and the binary into `~/.local/`).
+`gnome-shell-extension-appindicator`. Multi-language switching works via the *Language* submenu
+(following `LANGUAGE`/`LC_ALL`/`LC_MESSAGES`/`LANG` by default, and localizing `--help` too).
+Running `make -f linux/Makefile.linux install` installs the binary, `lang/*.json` into
+`$(PREFIX)/share/wireless-battery/lang/`, and the desktop launcher (`linux/wireless-battery.desktop`)
+plus `linux/wireless-battery.svg` into `$(PREFIX)` (defaults to `~/.local`); user language
+overrides live in `~/.config/wireless-battery/lang/`.
 
 Phase 1 covers Logitech, Razer, SteelSeries, Corsair, HyperX, PlayStation, Cooler Master, Glorious,
 Finalmouse and the shared Kysona/Pulsar/ATK/G-Wolves protocols. Bluetooth/UPower fallbacks, HeadsetControl and
@@ -411,19 +419,26 @@ The taskbar widget is a layered child window of `Shell_TrayWnd`, placed left of 
 
 ## Translations
 
-Every language is a plain UTF-8 text file in [`lang/`](lang): English on the left, the translation on the right.
+Every UI language is a flat static UTF-8 JSON file in [`lang/`](lang): English source text on the left, the translation on the right. Language files are loaded from disk at runtime rather than compiled into the executable, so you can edit them directly without rebuilding.
 
-```
-@code = it
-@name = Italiano
-Refresh now = Aggiorna ora
-{name} is at {percent}% = {name} è al {percent}%
+```json
+{
+    "@code": "it",
+    "@name": "Italiano",
+    "@rtl": false,
+    "Refresh now": "Aggiorna ora",
+    "{name} is at {percent}%": "{name} è al {percent}%"
+}
 ```
 
-- **Use your own language right away:** choose *Language → Add your own language...* in the menu. It opens `%APPDATA%\WirelessBattery\lang` with `_template.txt`, which lists every phrase. Copy it to e.g. `it.txt`, fill in `@code`, `@name` and the translations, and the language appears in the menu (no restart needed). A file there with the same `@code` as a built-in language replaces its phrases, so you can also fix a single word locally.
-- **Share it with everyone:** send the file as a pull request to [`lang/`](lang). The build includes every file in that folder automatically; no code change is needed.
-- Keep `{placeholders}` as they are, and add `@rtl = 1` for right-to-left scripts. Phrases left empty stay English, so a partial translation is fine.
-- The `--list` and `--dump` output stays English on purpose: it is pasted into GitHub issues.
+- **App UI (Windows & Linux):**
+  - Edit or add `.json` files directly inside the `lang/` folder next to `BatteryHub.exe` (or `/usr/share/wireless-battery/lang/`, `/usr/local/share/wireless-battery/lang/`, `$XDG_DATA_HOME/wireless-battery/lang/`, or `./lang/` on Linux).
+  - Or choose *Language → Add your own language...* in the menu to prepare your user override folder (`%APPDATA%\WirelessBattery\lang` on Windows, `~/.config/wireless-battery/lang` on Linux) with `_template.json`. Copy `_template.json` to e.g. `it.json`, fill in `@code`, `@name` and the translations, and it appears in the menu (no restart needed). Files in the user folder override built-in phrases with the same `@code`.
+  - Keep `{placeholders}` as they are, and set `"@rtl": true` for right-to-left scripts. Phrases left empty stay English, so a partial translation is fine.
+  - The `--list` and `--dump` output stays English on purpose: it is pasted into GitHub issues.
+- **Windows installer:** Inno Setup translations live in [`installer/lang/`](installer/lang) (saved as UTF-8 with BOM) and are registered under `[Languages]` in `installer/BatteryHub.iss`.
+- **Documentation:** every visible project document is translated as a single standalone Markdown file per language in [`docs/i18n/`](docs/i18n/README.md) (see [`docs/i18n/_template.md`](docs/i18n/_template.md) to add a new language with no build scripts required).
+- **Share it with everyone:** send a pull request adding your files in `lang/`, `installer/lang/`, `linux/wireless-battery.desktop`, and `docs/i18n/`. See [`docs/i18n/README.md`](docs/i18n/README.md) for the step-by-step checklist.
 
 ## Credits
 

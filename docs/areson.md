@@ -1,3 +1,7 @@
+<!-- lang-switcher:start -->
+🌐 **Languages:** **English** | [العربية](i18n/ar.md#sec-areson) | [Deutsch](i18n/de.md#sec-areson) | [Español](i18n/es.md#sec-areson) | [فارسی](i18n/fa.md#sec-areson) | [Français](i18n/fr.md#sec-areson) | [עברית](i18n/he.md#sec-areson) | [Magyar](i18n/hu.md#sec-areson) | [日本語](i18n/ja.md#sec-areson) | [한국어](i18n/ko.md#sec-areson) | [Polski](i18n/pl.md#sec-areson) | [Português (Brasil)](i18n/pt-BR.md#sec-areson) | [Русский](i18n/ru.md#sec-areson) | [Svenska](i18n/sv.md#sec-areson) | [Türkçe](i18n/tr.md#sec-areson) | [Українська](i18n/uk.md#sec-areson) | [Tiếng Việt](i18n/vi.md#sec-areson) | [简体中文](i18n/zh-CN.md#sec-areson) | [繁體中文](i18n/zh-TW.md#sec-areson) | [Add a language](i18n/README.md)
+<!-- lang-switcher:end -->
+
 # Areson 25A7 receiver battery support
 
 ## Why the original program missed the mouse

@@ -1,3 +1,7 @@
+<!-- lang-switcher:start -->
+🌐 **Languages:** **English** | [العربية](i18n/ar.md#sec-hyperx-haste-2) | [Deutsch](i18n/de.md#sec-hyperx-haste-2) | [Español](i18n/es.md#sec-hyperx-haste-2) | [فارسی](i18n/fa.md#sec-hyperx-haste-2) | [Français](i18n/fr.md#sec-hyperx-haste-2) | [עברית](i18n/he.md#sec-hyperx-haste-2) | [Magyar](i18n/hu.md#sec-hyperx-haste-2) | [日本語](i18n/ja.md#sec-hyperx-haste-2) | [한국어](i18n/ko.md#sec-hyperx-haste-2) | [Polski](i18n/pl.md#sec-hyperx-haste-2) | [Português (Brasil)](i18n/pt-BR.md#sec-hyperx-haste-2) | [Русский](i18n/ru.md#sec-hyperx-haste-2) | [Svenska](i18n/sv.md#sec-hyperx-haste-2) | [Türkçe](i18n/tr.md#sec-hyperx-haste-2) | [Українська](i18n/uk.md#sec-hyperx-haste-2) | [Tiếng Việt](i18n/vi.md#sec-hyperx-haste-2) | [简体中文](i18n/zh-CN.md#sec-hyperx-haste-2) | [繁體中文](i18n/zh-TW.md#sec-hyperx-haste-2) | [Add a language](i18n/README.md)
+<!-- lang-switcher:end -->
+
 # HyperX Pulsefire Haste 2 Wireless battery protocol
 
 Read by `HasteWireless` in `src/drivers/hyperx.cpp`. The queries come from

@@ -27,7 +27,9 @@ DRIVERS := \
     src/drivers/coolermaster.cpp \
     src/drivers/finalmouse.cpp
 
-SRC := src/linux/hid_linux.cpp src/linux/devices_linux.cpp src/linux/main_linux.cpp $(DRIVERS)
+PREFIX   ?= $(HOME)/.local
+
+SRC := src/linux/hid_linux.cpp src/linux/devices_linux.cpp src/linux/i18n_linux.cpp src/linux/main_linux.cpp $(DRIVERS)
 OBJ := $(patsubst src/%.cpp,build/linux/%.o,$(SRC))
 TARGET := wireless-battery
 
@@ -44,8 +46,24 @@ test:
 	./build/linux/linux_hid_test
 	$(CXX) $(CXXFLAGS) tests/json_output_test.cpp -o build/linux/json_output_test
 	./build/linux/json_output_test
+	$(CXX) $(CXXFLAGS) -DTEST_LINUX_I18N -Isrc tests/i18n_core_test.cpp src/linux/i18n_linux.cpp -o build/linux/i18n_core_test
+	./build/linux/i18n_core_test
+
+install: $(TARGET)
+	install -Dm755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/$(TARGET)
+	install -d $(DESTDIR)$(PREFIX)/share/wireless-battery/lang
+	install -m644 lang/*.json $(DESTDIR)$(PREFIX)/share/wireless-battery/lang/
+	install -Dm644 linux/wireless-battery.desktop $(DESTDIR)$(PREFIX)/share/applications/wireless-battery.desktop
+	install -Dm644 linux/wireless-battery.svg $(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/wireless-battery.svg
+
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/$(TARGET)
+	rm -rf $(DESTDIR)$(PREFIX)/share/wireless-battery/lang
+	rmdir --ignore-fail-on-non-empty $(DESTDIR)$(PREFIX)/share/wireless-battery 2>/dev/null || true
+	rm -f $(DESTDIR)$(PREFIX)/share/applications/wireless-battery.desktop
+	rm -f $(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/wireless-battery.svg
 
 clean:
 	rm -rf build/linux $(TARGET)
 
-.PHONY: clean test
+.PHONY: clean test install uninstall

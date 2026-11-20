@@ -1,3 +1,7 @@
+<!-- lang-switcher:start -->
+🌐 **Languages:** **English** | [العربية](i18n/ar.md#sec-releasing) | [Deutsch](i18n/de.md#sec-releasing) | [Español](i18n/es.md#sec-releasing) | [فارسی](i18n/fa.md#sec-releasing) | [Français](i18n/fr.md#sec-releasing) | [עברית](i18n/he.md#sec-releasing) | [Magyar](i18n/hu.md#sec-releasing) | [日本語](i18n/ja.md#sec-releasing) | [한국어](i18n/ko.md#sec-releasing) | [Polski](i18n/pl.md#sec-releasing) | [Português (Brasil)](i18n/pt-BR.md#sec-releasing) | [Русский](i18n/ru.md#sec-releasing) | [Svenska](i18n/sv.md#sec-releasing) | [Türkçe](i18n/tr.md#sec-releasing) | [Українська](i18n/uk.md#sec-releasing) | [Tiếng Việt](i18n/vi.md#sec-releasing) | [简体中文](i18n/zh-CN.md#sec-releasing) | [繁體中文](i18n/zh-TW.md#sec-releasing) | [Add a language](i18n/README.md)
+<!-- lang-switcher:end -->
+
 # Releasing
 
 The app updates itself from GitHub releases, but it only installs a setup whose SHA-256 is listed in

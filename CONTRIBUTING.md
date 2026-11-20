@@ -1,3 +1,7 @@
+<!-- lang-switcher:start -->
+🌐 **Languages:** **English** | [العربية](docs/i18n/ar.md#sec-contributing) | [Deutsch](docs/i18n/de.md#sec-contributing) | [Español](docs/i18n/es.md#sec-contributing) | [فارسی](docs/i18n/fa.md#sec-contributing) | [Français](docs/i18n/fr.md#sec-contributing) | [עברית](docs/i18n/he.md#sec-contributing) | [Magyar](docs/i18n/hu.md#sec-contributing) | [日本語](docs/i18n/ja.md#sec-contributing) | [한국어](docs/i18n/ko.md#sec-contributing) | [Polski](docs/i18n/pl.md#sec-contributing) | [Português (Brasil)](docs/i18n/pt-BR.md#sec-contributing) | [Русский](docs/i18n/ru.md#sec-contributing) | [Svenska](docs/i18n/sv.md#sec-contributing) | [Türkçe](docs/i18n/tr.md#sec-contributing) | [Українська](docs/i18n/uk.md#sec-contributing) | [Tiếng Việt](docs/i18n/vi.md#sec-contributing) | [简体中文](docs/i18n/zh-CN.md#sec-contributing) | [繁體中文](docs/i18n/zh-TW.md#sec-contributing) | [Add a language](docs/i18n/README.md)
+<!-- lang-switcher:end -->
+
 # Contributing
 
 ## Reporting whether a device works
@@ -59,7 +63,9 @@ Please open an issue with:
 
 ## Translations
 
-A language is one UTF-8 text file in `lang/` (copy `lang/_template.txt`, fill in `@code`, `@name` and the phrases). It is built into the app automatically. New UI text in the code goes through `T(L"...")`, or `TF(L"... {name} ...", { { L"name", value } })` when it contains values; never build translated sentences from pieces. After adding phrases, add them to `lang/_template.txt` too.
+UI languages are flat static UTF-8 JSON files in `lang/` loaded from disk at runtime on both Windows and Linux (copy `lang/_template.json` to `lang/<code>.json`, fill in `"@code"`, `"@name"` and the `"Original": "Translation"` entries — no rebuild required). New UI text in the code goes through `T(L"...")`, or `TF(L"... {name} ...", { { L"name", value } })` when it contains values; never build translated sentences from pieces. After adding phrases, add them to `lang/_template.json` too.
+
+Windows installer translations live in `installer/lang/*.isl` (saved as UTF-8 with BOM and registered in `installer/BatteryHub.iss`), Linux launcher comments live in `linux/wireless-battery.desktop`, and full documentation translations live in `docs/i18n/<code>.md` (single standalone file copied from `docs/i18n/_template.md`). See [`docs/i18n/README.md`](docs/i18n/README.md) for the complete contributor guide.
 
 ## Code style
 

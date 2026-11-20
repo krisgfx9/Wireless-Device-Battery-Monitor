@@ -1,3 +1,7 @@
+<!-- lang-switcher:start -->
+🌐 **Languages:** **English** | [العربية](i18n/ar.md#sec-nuphy) | [Deutsch](i18n/de.md#sec-nuphy) | [Español](i18n/es.md#sec-nuphy) | [فارسی](i18n/fa.md#sec-nuphy) | [Français](i18n/fr.md#sec-nuphy) | [עברית](i18n/he.md#sec-nuphy) | [Magyar](i18n/hu.md#sec-nuphy) | [日本語](i18n/ja.md#sec-nuphy) | [한국어](i18n/ko.md#sec-nuphy) | [Polski](i18n/pl.md#sec-nuphy) | [Português (Brasil)](i18n/pt-BR.md#sec-nuphy) | [Русский](i18n/ru.md#sec-nuphy) | [Svenska](i18n/sv.md#sec-nuphy) | [Türkçe](i18n/tr.md#sec-nuphy) | [Українська](i18n/uk.md#sec-nuphy) | [Tiếng Việt](i18n/vi.md#sec-nuphy) | [简体中文](i18n/zh-CN.md#sec-nuphy) | [繁體中文](i18n/zh-TW.md#sec-nuphy) | [Add a language](i18n/README.md)
+<!-- lang-switcher:end -->
+
 # NuPhy WH80 (USB cable and Bluetooth)
 
 Hardware tested with `19F5:A011`, firmware release `0116`, interface 1,

@@ -1,3 +1,7 @@
+<!-- lang-switcher:start -->
+🌐 **Languages:** **English** | [العربية](i18n/ar.md#sec-rawm) | [Deutsch](i18n/de.md#sec-rawm) | [Español](i18n/es.md#sec-rawm) | [فارسی](i18n/fa.md#sec-rawm) | [Français](i18n/fr.md#sec-rawm) | [עברית](i18n/he.md#sec-rawm) | [Magyar](i18n/hu.md#sec-rawm) | [日本語](i18n/ja.md#sec-rawm) | [한국어](i18n/ko.md#sec-rawm) | [Polski](i18n/pl.md#sec-rawm) | [Português (Brasil)](i18n/pt-BR.md#sec-rawm) | [Русский](i18n/ru.md#sec-rawm) | [Svenska](i18n/sv.md#sec-rawm) | [Türkçe](i18n/tr.md#sec-rawm) | [Українська](i18n/uk.md#sec-rawm) | [Tiếng Việt](i18n/vi.md#sec-rawm) | [简体中文](i18n/zh-CN.md#sec-rawm) | [繁體中文](i18n/zh-TW.md#sec-rawm) | [Add a language](i18n/README.md)
+<!-- lang-switcher:end -->
+
 # RAWM protocol notes
 
 RAWM mice (and the SADES Dagger, which shares the platform) talk to the RAWM HUB app over a
