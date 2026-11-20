@@ -32,6 +32,8 @@ void SetLightTheme(bool light);
 void SetBackground(bool on);
 // Icon above the percentage instead of beside it, when the taskbar is tall enough (kept across Create/Destroy).
 void SetStacked(bool on);
+// Places the widget on the left side of the taskbar instead of next to the notification area.
+void SetLeftSide(bool on);
 // Which taskbars show the strip: L"all" (default), L"main", or the id of one other monitor from
 // OtherMonitors() (then only that monitor shows it). Kept across Create/Destroy.
 void SetMonitorChoice(const std::wstring& choice);

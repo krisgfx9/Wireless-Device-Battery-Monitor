@@ -6,6 +6,7 @@
 #include <uiautomation.h>
 #include <algorithm>
 #include <climits>
+#include <optional>
 
 namespace {
 
@@ -14,6 +15,7 @@ UINT g_clickMsg;
 bool g_light, g_hover;
 bool g_background;  // opaque rounded plate behind the text, for transparent / restyled taskbars
 bool g_stacked;     // icon above the percentage (menu option, PR #525)
+bool g_leftSide;    // show on the left side of the taskbar (menu option)
 bool g_vertical;    // the primary taskbar is docked left or right: one block per device, stacked (PR #321)
 std::vector<WidgetItem> g_items;
 std::wstring g_tipText;
@@ -64,6 +66,8 @@ RECT g_wbRect{};             // last Widgets button rectangle (screen), empty wh
 HWND g_wbRectBar;            // taskbar g_wbRect was found in (guarded by g_wbLock)
 HWND g_wbTaskbar;            // taskbar to search, null while there is no widget (guarded by g_wbLock)
 HANDLE g_wbWake;             // auto-reset: wakes the lookup thread early
+bool g_measureLeft;          // guarded by g_wbLock
+std::optional<std::vector<RECT>> g_leftControls;  // screen coordinates, guarded by g_wbLock
 
 // Where a Windows 11 secondary taskbar's clock, widgets button and task buttons are. Its XAML has no child
 // windows for them, so the same lookup thread reads them with UI Automation (the clock has AutomationId
@@ -91,6 +95,39 @@ IUIAutomationCondition* StringCondition(IUIAutomation* uia, PROPERTYID prop, con
     if (v.bstrVal) uia->CreatePropertyCondition(prop, v, &c);
     VariantClear(&v);
     return c;
+}
+
+// Returns the visible taskbar buttons that a left-side widget must avoid.
+// Runs on the lookup thread, like MeasureSpan.
+std::optional<std::vector<RECT>> MeasureLeftControls(IUIAutomation* uia, HWND bar) {
+    IUIAutomationElement* root = nullptr;
+    if (FAILED(uia->ElementFromHandle(bar, &root)) || !root) return std::nullopt;
+    VARIANT button{};
+    button.vt = VT_I4;
+    button.lVal = UIA_ButtonControlTypeId;
+    IUIAutomationCondition* condition = nullptr;
+    IUIAutomationElementArray* buttons = nullptr;
+    int count = 0;
+    std::optional<std::vector<RECT>> controls;
+    if (SUCCEEDED(uia->CreatePropertyCondition(UIA_ControlTypePropertyId, button, &condition)) && condition &&
+        SUCCEEDED(root->FindAll(TreeScope_Descendants, condition, &buttons)) && buttons &&
+        SUCCEEDED(buttons->get_Length(&count)) && count > 0) {
+        controls.emplace();
+        for (int i = 0; i < count; ++i) {
+            IUIAutomationElement* el = nullptr;
+            RECT r{};
+            if (SUCCEEDED(buttons->GetElement(i, &el)) && el &&
+                SUCCEEDED(el->get_CurrentBoundingRectangle(&r)) && r.right > r.left && r.bottom > r.top)
+                controls->push_back(r);
+            if (el) el->Release();
+        }
+        if (controls->empty()) controls.reset();
+        else std::sort(controls->begin(), controls->end(), [](const RECT& a, const RECT& b) { return a.left < b.left; });
+    }
+    if (buttons) buttons->Release();
+    if (condition) condition->Release();
+    root->Release();
+    return controls;
 }
 
 Span MeasureSpan(IUIAutomation* uia, HWND bar) {
@@ -173,17 +210,13 @@ DWORD WINAPI WidgetsButtonThread(LPVOID) {
                 CoCreateInstance(__uuidof(CUIAutomation), nullptr, CLSCTX_INPROC_SERVER, __uuidof(IUIAutomation), (void**)&uia);
             if (uia && !btn) {
                 IUIAutomationElement* root = nullptr;
-                IUIAutomationCondition* cond = nullptr;
-                VARIANT id;
-                VariantInit(&id);
-                id.vt = VT_BSTR;
-                id.bstrVal = SysAllocString(L"WidgetsButton");
-                if (SUCCEEDED(uia->ElementFromHandle(bar, &root)) && root &&
-                    SUCCEEDED(uia->CreatePropertyCondition(UIA_AutomationIdPropertyId, id, &cond)) && cond)
-                    root->FindFirst(TreeScope_Descendants, cond, &btn);
-                VariantClear(&id);
-                if (cond) cond->Release();
-                if (root) root->Release();
+                if (SUCCEEDED(uia->ElementFromHandle(bar, &root)) && root) {
+                    if (IUIAutomationCondition* cond = StringCondition(uia, UIA_AutomationIdPropertyId, L"WidgetsButton")) {
+                        root->FindFirst(TreeScope_Descendants, cond, &btn);
+                        cond->Release();
+                    }
+                    root->Release();
+                }
             }
             if (btn && FAILED(btn->get_CurrentBoundingRectangle(&r))) {
                 btn->Release();  // stale (Widgets turned off, Explorer restarted): look it up again next time
@@ -193,7 +226,10 @@ DWORD WINAPI WidgetsButtonThread(LPVOID) {
         }
         AcquireSRWLockShared(&g_wbLock);
         bool mirrors = g_wbMirrors;
+        bool measureLeft = g_measureLeft;
         ReleaseSRWLockShared(&g_wbLock);
+        std::optional<std::vector<RECT>> leftControls;
+        if (bar && measureLeft && uia && IsXamlTaskbar(bar)) leftControls = MeasureLeftControls(uia, bar);
         std::vector<Span> spans;
         if (bar && mirrors && uia)
             for (HWND t = FindWindowExW(nullptr, nullptr, L"Shell_SecondaryTrayWnd", nullptr); t;
@@ -203,6 +239,7 @@ DWORD WINAPI WidgetsButtonThread(LPVOID) {
         if (bar && g_wbTaskbar == bar) {  // drop a result for a taskbar we no longer sit on
             g_wbRect = r;
             g_wbRectBar = bar;
+            g_leftControls = measureLeft == g_measureLeft ? std::move(leftControls) : std::nullopt;
         }
         g_spans = std::move(spans);
         ReleaseSRWLockExclusive(&g_wbLock);
@@ -214,6 +251,7 @@ DWORD WINAPI WidgetsButtonThread(LPVOID) {
 // same taskbar steps past the Widgets button straight away instead of after the next lookup.
 void WatchWidgetsButton(HWND taskbar) {
     AcquireSRWLockExclusive(&g_wbLock);
+    if (g_wbTaskbar != taskbar) g_leftControls.reset();
     g_wbTaskbar = taskbar;
     ReleaseSRWLockExclusive(&g_wbLock);
     if (!g_wbWake) {
@@ -230,6 +268,38 @@ RECT WidgetsButtonRect() {
     RECT r = g_wbRectBar && g_wbRectBar == g_wbTaskbar ? g_wbRect : RECT{};
     ReleaseSRWLockShared(&g_wbLock);
     return r;
+}
+
+// Find the first usable gap from the physical left edge.
+std::optional<int> LeftPlacement(const RECT& bar, const RECT& tray, int width, bool rtl) {
+    if (width <= 0) return std::nullopt;
+    const int gap = Px(4);
+    int x = bar.left + Px(10);
+    if (rtl) x = std::max(x, static_cast<int>(tray.right) + gap);
+    const int limit = rtl ? bar.right - gap : tray.left - gap;
+    if (IsXamlTaskbar(g_taskbar)) {
+        AcquireSRWLockShared(&g_wbLock);
+        if (!g_leftControls) {
+            ReleaseSRWLockShared(&g_wbLock);
+            return std::nullopt;
+        }
+        for (const RECT& r : *g_leftControls) {
+            if (r.top >= bar.bottom || r.bottom <= bar.top || r.right <= x) continue;
+            if (x + width + gap <= r.left) break;
+            x = r.right + gap;
+        }
+        ReleaseSRWLockShared(&g_wbLock);
+    } else {
+        // On Windows 10, reserve the Start button and stop at the task-button area.
+        RECT start{}, tasks{};
+        HWND startButton = FindWindowExW(g_taskbar, nullptr, L"Start", nullptr);
+        if (!startButton || !GetWindowRect(startButton, &start) || !g_rebar || !GetWindowRect(g_rebar, &tasks))
+            return std::nullopt;
+        if (start.left < x + width + gap && start.right > x) x = start.right + gap;
+        if (x + width + gap > tasks.left) return std::nullopt;
+    }
+    if (x + width > limit) return std::nullopt;
+    return x;
 }
 
 void ApplyTipTheme() {
@@ -953,6 +1023,22 @@ void SetStacked(bool on) {
     if (g_wnd) Reposition();
 }
 
+void SetLeftSide(bool on) {
+    const bool changed = g_leftSide != on;
+    g_leftSide = on;
+    AcquireSRWLockExclusive(&g_wbLock);
+    g_measureLeft = on;
+    if (!on) g_leftControls.reset();
+    ReleaseSRWLockExclusive(&g_wbLock);
+    if (g_wbWake) SetEvent(g_wbWake);
+    if (changed && on && g_rebar && IsWindow(g_rebar) && g_taskbar && IsWindow(g_taskbar)) {
+        RECT client{};
+        if (GetClientRect(g_taskbar, &client))
+            PostMessageW(g_taskbar, WM_SIZE, SIZE_RESTORED, MAKELPARAM(client.right, client.bottom));
+    }
+    if (g_wnd) Reposition();
+}
+
 void SetMonitorChoice(const std::wstring& choice) {
     g_choice = choice.empty() ? L"all" : choice;
     SyncMirrors();  // adds, removes or hides strips right away
@@ -1041,16 +1127,26 @@ bool Reposition() {
     ScreenToClient(g_taskbar, &p);
     int left = p.x - g_size.cx - Px(2);
 
+    // Custom tray offsets apply to the usual position, including when no safe left gap is found.
+    bool placedOnLeft = false;
+    if (g_leftSide) {
+        if (const auto x = LeftPlacement(bar, tr, g_size.cx, rtl)) {
+            POINT anchor{ *x + (rtl ? g_size.cx : 0), bar.top };
+            MapWindowPoints(nullptr, g_taskbar, &anchor, 1);
+            left = anchor.x;
+            placedOnLeft = true;
+        }
+    }
 
     // Optional user override in DPI-independent pixels (e.g. for custom padding).
     DWORD customOffset = 0, sz = sizeof(customOffset);
-    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\WirelessBattery", L"TaskbarOffset",
+    if (!placedOnLeft && RegGetValueW(HKEY_CURRENT_USER, L"Software\\WirelessBattery", L"TaskbarOffset",
                      RRF_RT_REG_DWORD, nullptr, &customOffset, &sz) == ERROR_SUCCESS) {
         left -= Px((int)customOffset);
     }
 
-    // Windows 10: Explorer re-expands the task buttons on its own layout passes; narrow them again.
-    if (g_rebar && IsWindow(g_rebar)) {
+    // Windows 10: narrow the task-button area for the original tray-side placement.
+    if (!placedOnLeft && g_rebar && IsWindow(g_rebar)) {
         RECT rr;
         GetWindowRect(g_rebar, &rr);
         POINT tl{ rtl ? rr.right : rr.left, rr.top };
