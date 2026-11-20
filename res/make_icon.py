@@ -1,4 +1,4 @@
-"""Turns res/app.svg (the app icon by nik-txt) into res/app.ico (white: the exe, Start menu and installer, and
+"""Turns res/app.svg (the app icon by nik-txt) into res/app.ico (framed white artwork for the exe, Start menu, installer and
 dark themes) and res/app_light.ico (black: the request window on light themes). Needs Python 3 and Pillow.
 
 Only the simple SVG subset the icon uses is understood: <path d="..."> with M L H V C S Z commands
@@ -82,7 +82,7 @@ def subpaths(d):
         yield pts
 
 
-def render(paths, size, box, color):
+def render(paths, size, box, color, framed=False):
     big = size * SUPER
     x0, y0, side = box
     scale = big / side
@@ -95,7 +95,30 @@ def render(paths, size, box, color):
     alpha = mask.convert("L").resize((size, size), Image.LANCZOS)
     img = Image.new("RGBA", (size, size), color + (0,))
     img.putalpha(alpha)
-    return img
+    if not framed:
+        return img  # Keep the dynamic black icon for light-themed windows unchanged.
+
+    # Static Windows EXE icon contrast frame (#3834).
+    # Windows Explorer, shortcuts, Start and the installer use app.ico regardless
+    # of the system theme. A neutral dark plate makes the original white artwork
+    # legible on light backgrounds; a subtle pale border separates it on dark ones.
+    # Draw the plate at SUPER resolution so corners/border stay clean at 16 px.
+    plate = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(plate)
+    margin = round(big * 0.032)
+    draw.rounded_rectangle(
+        (margin, margin, big - margin - 1, big - margin - 1),
+        radius=round(big * 0.21),
+        fill=(36, 45, 60, 255),
+        outline=(143, 157, 180, 255),
+        width=max(1, round(big * 0.045)),
+    )
+    plate = plate.resize((size, size), Image.LANCZOS)
+    # Scale the unchanged source artwork slightly to leave clear padding.
+    glyph_side = max(1, round(size * 0.80))
+    glyph = img.resize((glyph_side, glyph_side), Image.LANCZOS)
+    plate.alpha_composite(glyph, ((size - glyph_side) // 2, (size - glyph_side) // 2))
+    return plate
 
 
 def main():
@@ -115,7 +138,7 @@ def main():
         pngs = []
         for s in SIZES:
             buf = io.BytesIO()
-            render(paths, s, box, color).save(buf, "PNG")
+            render(paths, s, box, color, framed=(name == "app.ico")).save(buf, "PNG")
             pngs.append(buf.getvalue())
         out = io.BytesIO()
         out.write(struct.pack("<HHH", 0, 1, len(SIZES)))
