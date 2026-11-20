@@ -73,6 +73,7 @@ Could not save history changes. =
 Hide last known / asleep devices = 
 Show disconnected devices =
 Record battery history =
+Display settings =
 Show on the taskbar (icon + percentage) = 
 Show as tray icons = 
 Background behind taskbar text (for transparent taskbars) = 
@@ -149,22 +150,38 @@ controller =
 other = 
 
 # How a device is connected
+Connection: {connection} =
 2.4 GHz dongle = 
 2.4 GHz dongle or USB = 
 2.4 GHz receiver = 
 2.4 GHz receiver / USB = 
 2.4 GHz receiver or USB = 
+2.4 GHz receiver (battery over Bluetooth LE) =
+2.4 GHz transmitter =
 Base station = 
+Bluetooth =
+Bluetooth LE =
 BT600 adapter = 
 Corsair receiver = 
 Jabra Link dongle = 
 Logitech receiver = 
+Phone Link =
 Razer receiver = 
+ROG Omni Receiver =
+Switch mode =
 USB / Bluetooth = 
 USB base station = 
 USB cable = 
+USB dongle =
 UWB base station = 
 Wireless adapter = 
+Xbox Wireless =
+Xbox Wireless / Bluetooth =
+demo =
+
+# Device status details
+docked =
+docked, Astro Command Center =
 
 # Updates
 Automatically check for updates = 
@@ -213,3 +230,6 @@ BatteryHub could not reopen. Please start it manually or repair the installation
 BatteryHub is up to date. = 
 BatteryHub update = 
 BatteryHub will close briefly while the update is installed. = 
+
+# Windows command-line help dialog
+BatteryHub options:\n\n--list   Print devices and battery levels\n--json   Print a JSON array of devices and battery levels\n--dump   Print every HID collection and device\n--report Open the "Request support for a device" window\n--demo   Show sample devices\n--quit   Quit a running instance =

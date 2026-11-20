@@ -442,7 +442,7 @@ std::wstring StatusText(const TrayEntry& e) {
     else if (s.percent >= 0) t = std::to_wstring(s.percent) + L"%";
     else if (e.lastPct >= 0) t = TF(L"{percent}% (last known)", { { L"percent", std::to_wstring(e.lastPct) } });
     else t = T(L"unknown");
-    if (!s.detail.empty() && s.percent >= 0) t += L" (" + s.detail + L")";
+    if (!s.detail.empty() && s.percent >= 0) t += L" (" + T(s.detail) + L")";
     if (s.full || (s.charging && s.percent >= 100)) t += std::wstring(L", ") + T(L"fully charged");
     else if (s.charging) t += std::wstring(L", ") + T(L"charging");
     if (s.asleep) t += std::wstring(L", ") + T(L"asleep");
@@ -808,6 +808,7 @@ void MoveEntry(const std::wstring& key, int dir) {
 
 void ShowMenu() {
     ApplyMenuTheme(g_lightTaskbar);
+    i18n::Init();  // pick up language files added since the last time
     HMENU m = CreatePopupMenu();
     std::vector<std::wstring> keys;  // device index -> device key; menu id ID_DEVICE_FIRST + index * DEV_STRIDE + command
     std::vector<TrayEntry*> all = OrderedEntries(false), shown = OrderedEntries(true);
@@ -820,6 +821,11 @@ void ShowMenu() {
         bool canLeft = pos != shown.end() && pos != shown.begin();
         bool canRight = pos != shown.end() && pos + 1 != shown.end();
         HMENU sub = CreatePopupMenu();
+        if (!e->st.via.empty()) {
+            const auto connection = TF(L"Connection: {connection}", { { L"connection", T(e->st.via) } });
+            AppendMenuW(sub, MF_STRING | MF_GRAYED, 0, connection.c_str());
+            AppendMenuW(sub, MF_SEPARATOR, 0, nullptr);
+        }
         AppendMenuW(sub, MF_STRING | (IsHidden(k) ? 0 : MF_CHECKED), base + DEV_TOGGLE,
                     g_wantWidget ? T(L"Show on the taskbar") : T(L"Show in the tray"));
         AppendMenuW(sub, MF_SEPARATOR, 0, nullptr);
@@ -844,20 +850,22 @@ void ShowMenu() {
         }
         AppendMenuW(sub, MF_POPUP, (UINT_PTR)alertMenu, T(L"Battery alerts"));
         AppendMenuW(sub, MF_STRING, base + DEV_HISTORY, T(L"Battery history..."));
-        std::wstring line = DisplayName(*e) + L":  " + StatusText(*e) + L"   [" + T(e->st.via) + L"]";
+        std::wstring line = DisplayName(*e) + L"  \u00B7  " + StatusText(*e);
         AppendMenuW(m, MF_POPUP | (IsHidden(k) ? 0 : MF_CHECKED), (UINT_PTR)sub, line.c_str());
         keys.push_back(k);
     }
-    AppendMenuW(m, MF_STRING | (g_hideLastKnown ? MF_CHECKED : 0), ID_HIDE_LAST_KNOWN, T(L"Hide last known / asleep devices"));
-    AppendMenuW(m, MF_STRING | (g_showDisconnectedDevices ? MF_CHECKED : 0), ID_SHOW_DISCONNECTED, T(L"Show disconnected devices"));
-    AppendMenuW(m, MF_STRING | (g_recordHistory ? MF_CHECKED : 0), ID_RECORD_HISTORY, T(L"Record battery history"));
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(m, MF_STRING | (g_wantWidget ? MF_CHECKED : 0), ID_MODE_WIDGET, T(L"Show on the taskbar (icon + percentage)"));
-    AppendMenuW(m, MF_STRING | (!g_wantWidget ? MF_CHECKED : 0), ID_MODE_TRAY, T(L"Show as tray icons"));
-    CheckMenuRadioItem(m, ID_MODE_WIDGET, ID_MODE_TRAY, g_wantWidget ? ID_MODE_WIDGET : ID_MODE_TRAY, MF_BYCOMMAND);
+    HMENU display = CreatePopupMenu();
+    AppendMenuW(display, MF_STRING, ID_MODE_WIDGET, T(L"Show on the taskbar (icon + percentage)"));
+    AppendMenuW(display, MF_STRING, ID_MODE_TRAY, T(L"Show as tray icons"));
+    CheckMenuRadioItem(display, ID_MODE_WIDGET, ID_MODE_TRAY, g_wantWidget ? ID_MODE_WIDGET : ID_MODE_TRAY, MF_BYCOMMAND);
+    AppendMenuW(display, MF_SEPARATOR, 0, nullptr);
     UINT bgFlags = MF_STRING | (g_widgetBackground ? MF_CHECKED : 0) | (g_wantWidget ? 0 : MF_GRAYED);
-    AppendMenuW(m, bgFlags, ID_WIDGET_BACKGROUND, T(L"Background behind taskbar text (for transparent taskbars)"));
-    AppendMenuW(m, MF_STRING | (g_stacked ? MF_CHECKED : 0) | (g_wantWidget ? 0 : MF_GRAYED), ID_STACKED, T(L"Icons above percentages (narrower)"));
+    AppendMenuW(display, bgFlags, ID_WIDGET_BACKGROUND, T(L"Background behind taskbar text (for transparent taskbars)"));
+    AppendMenuW(display, MF_STRING | (g_stacked ? MF_CHECKED : 0) | (g_wantWidget ? 0 : MF_GRAYED),
+                ID_STACKED, T(L"Icons above percentages (narrower)"));
+    AppendMenuW(display, MF_STRING | (g_brandColors ? MF_CHECKED : 0), ID_BRAND_COLORS,
+                T(L"Brand colors (Razer green, Logitech blue, ...)"));
     // With more than one monitor: choose which taskbars show the widget (all, main only, or one monitor).
     auto monitors = widget::OtherMonitors();
     if (monitors.size() > 31) monitors.resize(31);
@@ -877,12 +885,16 @@ void ShowMenu() {
             checked = ID_MONITOR_FIRST + 31;
         }
         CheckMenuRadioItem(sub, ID_MONITOR_ALL, ID_MONITOR_FIRST + 31, checked, MF_BYCOMMAND);
-        AppendMenuW(m, MF_POPUP | (g_wantWidget ? 0 : MF_GRAYED), (UINT_PTR)sub, T(L"Show the widget on"));
+        AppendMenuW(display, MF_POPUP | (g_wantWidget ? 0 : MF_GRAYED), (UINT_PTR)sub, T(L"Show the widget on"));
     }
-    AppendMenuW(m, MF_STRING | (g_brandColors ? MF_CHECKED : 0), ID_BRAND_COLORS, T(L"Brand colors (Razer green, Logitech blue, ...)"));
-    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(display, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(display, MF_STRING | (g_hideLastKnown ? MF_CHECKED : 0), ID_HIDE_LAST_KNOWN,
+                T(L"Hide last known / asleep devices"));
+    AppendMenuW(display, MF_STRING | (g_showDisconnectedDevices ? MF_CHECKED : 0), ID_SHOW_DISCONNECTED,
+                T(L"Show disconnected devices"));
+    AppendMenuW(m, MF_POPUP, (UINT_PTR)display, T(L"Display settings"));
+    AppendMenuW(m, MF_STRING | (g_recordHistory ? MF_CHECKED : 0), ID_RECORD_HISTORY, T(L"Record battery history"));
     // Language: automatic, every built-in or user-added language (in its own name), and a way to add one.
-    i18n::Init();  // picks up language files added since the last time
     auto languages = i18n::Available();
     if (languages.size() > 64) languages.resize(64);
     {
@@ -1193,14 +1205,15 @@ int ListJson() {
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     if (cmdLine && wcsstr(cmdLine, L"--json")) return ListJson();
     if (cmdLine && wcsstr(cmdLine, L"--help")) {
+        i18n::Init();
         MessageBoxW(nullptr,
-                    L"BatteryHub options:\n\n"
-                    L"--list   Print devices and battery levels\n"
-                    L"--json   Print a JSON array of devices and battery levels\n"
-                    L"--dump   Print every HID collection and device\n"
-                    L"--report Open the \"Request support for a device\" window\n"
-                    L"--demo   Show sample devices\n"
-                    L"--quit   Quit a running instance",
+                    T(L"BatteryHub options:\n\n"
+                      L"--list   Print devices and battery levels\n"
+                      L"--json   Print a JSON array of devices and battery levels\n"
+                      L"--dump   Print every HID collection and device\n"
+                      L"--report Open the \"Request support for a device\" window\n"
+                      L"--demo   Show sample devices\n"
+                      L"--quit   Quit a running instance"),
                     L"BatteryHub", MB_OK | MB_ICONINFORMATION);
         return 0;
     }
