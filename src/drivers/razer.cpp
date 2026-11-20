@@ -9,6 +9,7 @@
 #include "drivers.h"
 
 #include <algorithm>
+#include <map>
 
 namespace {
 
@@ -116,6 +117,21 @@ DeviceKind Kind(const std::vector<HidColl>& colls, USHORT vid, USHORT pid) {
 }  // namespace
 
 void PollRazer(PollContext& ctx) {
+    struct LastReading { std::wstring path; DeviceStatus status; };
+    static std::map<USHORT, LastReading> lastGood;
+    for (auto it = lastGood.begin(); it != lastGood.end();) {
+        bool present = false;
+        for (const auto& c : ctx.colls)
+            if (c.path == it->second.path) { present = true; break; }
+        if (present) { ++it; continue; }
+        // A removed receiver is different from a mouse sleeping behind it.
+        DeviceStatus gone = it->second.status;
+        gone.connected = false;
+        gone.percent = -1;
+        gone.charging = false;
+        ctx.out.push_back(gone);
+        it = lastGood.erase(it);
+    }
     const auto firstRazer = ctx.out.size();
     for (auto [vid, pid] : ctx.Products(0x1532)) {
         for (const HidColl* c : ctx.Find(vid, pid, [](const HidColl& c) { return c.featLen() == 91; })) {
@@ -144,11 +160,15 @@ void PollRazer(PollContext& ctx) {
             s.via = L"Razer receiver";
             s.graceSec = 120;  // retain the last reading briefly when Synapse prevents a valid reply
             if (res == Rz::Offline) {
-                s.connected = false;
+                // Receiver timeouts cannot distinguish sleep from the power switch.
+                // Keep a previously seen mouse dimmed while its receiver remains plugged in.
+                s.asleep = s.kind == DeviceKind::Mouse && lastGood.count(pid) != 0;
+                s.connected = s.asleep;
             } else {
                 s.percent = Clamp100((args[1] * 100 + 127) / 255);
                 std::vector<BYTE> ch;
                 if (Command(d, tid, 0x07, 0x84, 0x02, ch) == Rz::Ok) s.charging = ch[1] == 1;
+                if (s.kind == DeviceKind::Mouse) lastGood[pid] = { c->path, s };
             }
             // Cable + receiver can report the same device; keep a live reading over an offline receiver.
             auto existing = std::find_if(ctx.out.begin() + firstRazer, ctx.out.end(),
@@ -157,9 +177,10 @@ void PollRazer(PollContext& ctx) {
                 ctx.Add(s, vid, pid);
             } else {
                 ctx.Claim(vid, pid);
-                if (!existing->connected && s.connected) {
+                if (s.percent >= 0 && existing->percent < 0) {
                     existing->connected = true;
                     existing->percent = s.percent;
+                    existing->asleep = false;
                 }
                 existing->charging |= s.charging;
             }
