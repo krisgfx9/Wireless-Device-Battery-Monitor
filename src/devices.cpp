@@ -50,7 +50,7 @@ std::vector<DeviceStatus> PollAllDevices() {
     PollGlorious(ctx);
     PollAula(ctx);       // before Kysona (shares the 3554 vendor id) and SONiX (shares 05AC:024F)
     PollAulaMouse(ctx);
-    PollEweadn(ctx);     // EWEADN S7 / S9 mice on 372E:103D / 1027 (AULA keeps 372E:106C)
+    PollEweadn(ctx);     // BeiYing mice: EWEADN S7 / S9 on 372E:103D / 1027, RK M3 on 1019 / 102A (AULA keeps 106C)
     PollDareu(ctx);
     PollZenith(ctx);
     PollDarmoshark(ctx);

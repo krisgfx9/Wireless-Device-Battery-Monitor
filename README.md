@@ -151,6 +151,7 @@ Redragon M602-KS battery percentage was verified on the 2.4 GHz receiver (`258A:
 | **AJAZZ AK992** | Telink 2.4 GHz receiver `320F:50C3` (tested) | EVision battery query on HID collection `FF1C:0092` |
 | **ZOWIE** | EC1/EC2/EC3-CW, DW series (U2-DW, S2-DW ...) and U2 on its 2.4 GHz receiver | Community-documented read-only vendor commands |
 | **Royal Kludge (RK)** | MG6 Pro on the 2.4 GHz dongle (`2E3C:00A6` / `00E6`) or USB cable (`2E3C:00A5` / `00E5`) | QiWang 64-byte frame from RK's web driver, `GET_BATTER_VOL` read (percent, voltage, charging) |
+| **Royal Kludge (RK) M3** | M3 on its 2.4 GHz dongle (`372E:1019`, hardware-tested) or USB cable (`372E:102A`, untested) | Same BeiYing feature report as EWEADN, from RK's web driver: device basics `4F 81` with sequence number 2 (battery percent and charging bit) |
 | **ASUS ROG** | Strix Scope II 96 (RX), Azoth, Falchion keyboards; Keris, Harpe, Gladius, Chakram, Spatha, Pugio, Strix Impact mice; Pelta headset (2.4 GHz dongle); Cetra Open Wireless earbuds (SpeedNova dongle `0B05:1CAC`, L / R / case); the Omni Receiver | ROG HID battery query |
 | **Machenike** | L7 Arctic / L7 Mix on the `248A:FF4C` 2.4 GHz receiver or `248A:FF4E` USB cable (both tested) | Read-only feature report `51`, status command `06`; battery and charging. [Protocol notes](docs/machenike.md) |
 | **MCHOSE** | L7 / L7 Pro / L7 Ultra (L7 Ultra tested), M7 / M7 Ultra, A7 / A7 Ultra, K7 mice on the 2.4 GHz receiver or USB cable; A5 V2 Ultra (2.4 GHz receiver `3837:100C`, tested), K7 Ultra (2.4 GHz receiver `3837:1001`, tested; A7 V2 Ultra+ `3837:100B` expected to work, issue 227); G3 V2 (2.4 GHz receiver `3837:4245` and USB cable `3837:418C`)<br>K7 V2 Ultra+ on the 2.4 GHz receiver `3837:1014` or on its USB cable `3837:4028` (both tested; the other new-family receiver ids `1018`, `1016`, `102C`, `102D` are untested) | Vendor feature report, inverted payload (protocol from alexfrih/mchose-linux); Realtek `3837` dongles answer the same query with the vid field set to `41E4` (A5 V2 Ultra) or `3837` (K7 Ultra); G3 V2: read-only vendor query on `FF01:0010`.<br>K7 V2 Ultra+: 64-byte report `0x4D`, device-info command `0x0900` on `FF01:0001` (protocol from M HUB's web driver) |
@@ -234,6 +235,7 @@ These reports cover the listed connection modes and behaviors; battery confirmat
 - HyperX Pulsefire Haste 2 Core Wireless (dongle `03F0:0AB5`; see the HyperX table row for the separately tested Haste 2 Wireless and Mini)
 - AirPods Max (Bluetooth, model `200A`)
 - AULA HERO 68 Air (8K Wireless Receiver `372E:106C`)
+- Royal Kludge M3 (dongle `372E:1019`; charging and the USB cable untested)
 - AULA SC580 (USB cable `088D:062E` and receiver `089D:062F`, including charging and sleep)
 - Ninjutso Ten Air (receiver `093A:EB01` and USB cable `093A:E020`)
 - MCHOSE K7 Ultra (receiver `3837:1001`)
