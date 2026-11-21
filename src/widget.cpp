@@ -251,6 +251,7 @@ wchar_t Glyph(DeviceKind k, bool bluetooth) {
         case DeviceKind::Gamepad:  return 0xE7FC;  // Game
         case DeviceKind::Phone:    return 0xE8EA;  // CellPhone
         case DeviceKind::Microphone: return 0xE720;  // Microphone
+        case DeviceKind::Speaker:  return 0xE7F5;  // Speakers
         default:                   return bluetooth ? 0xE702 : 0xE772;  // Bluetooth / Devices
     }
 }

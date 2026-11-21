@@ -114,6 +114,8 @@ test: test-update-core test-update-win test-update-signature
 	./build/jabra_driver_test.exe
 	$(CXX) -std=c++17 -O2 -Wall tests/gamesir_ble_protocol_test.cpp -o build/gamesir_ble_protocol_test.exe
 	./build/gamesir_ble_protocol_test.exe
+	$(CXX) -std=c++17 -O2 -Wall -Wextra tests/fastpair_stream_test.cpp -o build/fastpair_stream_test.exe
+	./build/fastpair_stream_test.exe
 
 test-update-core:
 	@mkdir -p build

@@ -135,6 +135,7 @@ std::vector<DeviceStatus> PollAllDevices() {
     PollPhoneLink(ctx);
     PollGalaxyBuds(ctx);  // before the Bluetooth fallback, which skips devices already listed by name
     PollNothingEar(ctx);  // before the Bluetooth fallback, which skips devices already listed by name
+    PollMarshall(ctx);    // EMBERTON II: Windows has no level for it; before the Bluetooth fallback as well
     PollMoondrop(ctx);
     PollDarkrim(ctx);
     PollAlienware(ctx);
