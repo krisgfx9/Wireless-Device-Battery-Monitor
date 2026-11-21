@@ -69,16 +69,22 @@ HANDLE g_wbWake;             // auto-reset: wakes the lookup thread early
 // windows for them, so the same lookup thread reads them with UI Automation (the clock has AutomationId
 // "SystemTrayIcon", widgets button "WidgetsButton", task buttons class "Taskbar.TaskListButtonAutomationPeer";
 // found by PR #107).
+// On a vertical (left / right) taskbar "left/right" below read as "top/bottom": positions run along the bar.
 struct Span {
     HWND bar = nullptr;
     bool measured = false;   // UI Automation answered for this taskbar
     bool hasClock = false;   // the clock can be turned off on secondary taskbars
-    int clockLeft = 0;       // screen x
+    int clockLeft = 0;       // screen x (y on a vertical bar)
     bool hasWidgets = false; // Widgets (weather) button on secondary taskbar
     RECT widgets{};          // bounding rectangle of WidgetsButton (screen coords)
     bool hasTasks = false;
-    int tasksRight = 0;      // right edge of the last task button left of the clock (screen x)
+    int tasksRight = 0;      // right (bottom) edge of the last task button before the clock (screen x / y)
 };
+
+bool IsVertical(const RECT& r) { return r.bottom - r.top > r.right - r.left; }
+// Start and end of a rectangle along a taskbar's length: x for a horizontal bar, y for a vertical one.
+int Lo(const RECT& r, bool vertical) { return vertical ? r.top : r.left; }
+int Hi(const RECT& r, bool vertical) { return vertical ? r.bottom : r.right; }
 std::vector<Span> g_spans;   // guarded by g_wbLock
 bool g_wbMirrors;            // guarded by g_wbLock: measure secondary taskbars too
 
@@ -100,7 +106,10 @@ Span MeasureSpan(IUIAutomation* uia, HWND bar) {
     IUIAutomationElement* root = nullptr;
     if (!GetWindowRect(bar, &br) || FAILED(uia->ElementFromHandle(bar, &root)) || !root) return s;
     s.measured = true;
-    auto inBar = [&](const RECT& r) { return r.right > r.left && r.left >= br.left && r.right <= br.right; };
+    bool v = IsVertical(br);
+    auto inBar = [&](const RECT& r) {
+        return Hi(r, v) > Lo(r, v) && Lo(r, v) >= Lo(br, v) && Hi(r, v) <= Hi(br, v);
+    };
     if (IUIAutomationCondition* clock = StringCondition(uia, UIA_AutomationIdPropertyId, L"SystemTrayIcon")) {
         IUIAutomationElementArray* all = nullptr;
         int n = 0;
@@ -109,8 +118,8 @@ Span MeasureSpan(IUIAutomation* uia, HWND bar) {
                 IUIAutomationElement* el = nullptr;
                 RECT r{};
                 if (SUCCEEDED(all->GetElement(i, &el)) && el && SUCCEEDED(el->get_CurrentBoundingRectangle(&r)) && inBar(r) &&
-                    (!s.hasClock || r.left < s.clockLeft)) {
-                    s.clockLeft = r.left;
+                    (!s.hasClock || Lo(r, v) < s.clockLeft)) {
+                    s.clockLeft = Lo(r, v);
                     s.hasClock = true;
                 }
                 if (el) el->Release();
@@ -137,9 +146,9 @@ Span MeasureSpan(IUIAutomation* uia, HWND bar) {
                 IUIAutomationElement* el = nullptr;
                 RECT r{};
                 if (SUCCEEDED(all->GetElement(i, &el)) && el && SUCCEEDED(el->get_CurrentBoundingRectangle(&r)) && inBar(r) &&
-                    (!s.hasClock || r.right <= s.clockLeft) && (!s.hasWidgets || r.right <= s.widgets.left) &&
-                    (!s.hasTasks || r.right > s.tasksRight)) {
-                    s.tasksRight = r.right;
+                    (!s.hasClock || Hi(r, v) <= s.clockLeft) && (!s.hasWidgets || Hi(r, v) <= Lo(s.widgets, v)) &&
+                    (!s.hasTasks || Hi(r, v) > s.tasksRight)) {
+                    s.tasksRight = Hi(r, v);
                     s.hasTasks = true;
                 }
                 if (el) el->Release();
@@ -457,8 +466,9 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
         iconH = std::max(iconH, out[s.icon].m.h);
         textH = std::max(textH, out[s.label].m.h);
     }
-    bool stacked = !g_vertical && g_stacked && !slots.empty() && barH >= iconH + rowGap + textH + barRoom + Px(6);
-    if (g_vertical) {
+    bool vertical = barH > barW;  // per bar: a secondary taskbar can be docked differently from the main one
+    bool stacked = !vertical && g_stacked && !slots.empty() && barH >= iconH + rowGap + textH + barRoom + Px(6);
+    if (vertical) {
         // One block per device, centred in the bar's width: icon, then the percentage (and bolt) under it.
         width = barW;
         int y = Px(6);
@@ -616,40 +626,45 @@ void HideMirror(Mirror& m) {
 
 // Places a mirror left of its taskbar's clock (and left of the Widgets button if present), or hides it
 // when that spot is unknown or taken by task buttons: never guess and cover something.
+// On a vertical (left / right) taskbar the same happens along the bar's length: the mirror sits above
+// the clock, centred in the bar's width, like the primary strip does.
 void PositionMirror(Mirror& m) {
     RECT bar{};
     if (!GetWindowRect(m.bar, &bar) || (GetWindowLongW(m.bar, GWL_EXSTYLE) & WS_EX_LAYOUTRTL)) { HideMirror(m); return; }
+    bool v = IsVertical(bar);
     g_dpiBar = m.bar;
-    if (Dpi() != m.dpi || m.size.cy != bar.bottom - bar.top) PaintMirror(m), g_dpiBar = m.bar;
-    int right = 0, minLeft = bar.left;
+    // The strip's cross-bar size equals the bar's; a mismatch means the bar was resized or re-docked.
+    if (Dpi() != m.dpi || (v ? m.size.cx != bar.right - bar.left : m.size.cy != bar.bottom - bar.top)) PaintMirror(m), g_dpiBar = m.bar;
+    int length = v ? m.size.cy : m.size.cx;  // the strip's size along the bar
+    int right = 0, minLeft = Lo(bar, v);      // read "right"/"left" as "bottom"/"top" on a vertical bar
     bool known = false;
     // StartAllBack can put a full notification area on each secondary taskbar.
     // Use its left edge, as on the primary taskbar, to clear all of the tray icons.
     HWND tray = FindWindowExW(m.bar, nullptr, L"TrayNotifyWnd", nullptr);
     RECT tr{};
     if (tray && IsWindowVisible(tray) && GetWindowRect(tray, &tr) &&
-        tr.left > bar.left && tr.right <= bar.right && tr.right > tr.left &&
-        tr.bottom > bar.top && tr.top < bar.bottom) {
-        right = tr.left;
+        Lo(tr, v) > Lo(bar, v) && Hi(tr, v) <= Hi(bar, v) && Hi(tr, v) > Lo(tr, v) &&
+        Hi(tr, !v) > Lo(bar, !v) && Lo(tr, !v) < Hi(bar, !v)) {
+        right = Lo(tr, v);
         known = true;
     } else if (!IsXamlTaskbar(m.bar)) {  // Windows 10: the clock is a real child window (absent when it is turned off)
         HWND clock = FindWindowExW(m.bar, nullptr, L"ClockButton", nullptr);
         RECT cr{};
-        right = clock && IsWindowVisible(clock) && GetWindowRect(clock, &cr) ? cr.left : bar.right - Px(8);
+        right = clock && IsWindowVisible(clock) && GetWindowRect(clock, &cr) ? Lo(cr, v) : Hi(bar, v) - Px(8);
         for (const wchar_t* cls : { L"ShellFeedsTaskbarViewWindow", L"DynamicContent2" }) {
             HWND feeds = FindWindowExW(m.bar, nullptr, cls, nullptr);
             RECT fr{};
-            if (feeds && IsWindowVisible(feeds) && GetWindowRect(feeds, &fr) && fr.left < right && fr.right > fr.left)
-                right = fr.left;
+            if (feeds && IsWindowVisible(feeds) && GetWindowRect(feeds, &fr) && Lo(fr, v) < right && Hi(fr, v) > Lo(fr, v))
+                right = Lo(fr, v);
         }
         known = true;
     } else {
         AcquireSRWLockShared(&g_wbLock);
         for (const auto& s : g_spans)
             if (s.bar == m.bar && s.measured) {
-                right = s.hasClock ? s.clockLeft : bar.right - Px(8);
-                if (s.hasWidgets && s.widgets.left < right && s.widgets.right > right - m.size.cx - Px(2))
-                    right = s.widgets.left;
+                right = s.hasClock ? s.clockLeft : Hi(bar, v) - Px(8);
+                if (s.hasWidgets && Lo(s.widgets, v) < right && Hi(s.widgets, v) > right - length - Px(2))
+                    right = Lo(s.widgets, v);
                 if (s.hasTasks) minLeft = s.tasksRight + Px(4);
                 known = true;
             }
@@ -662,15 +677,19 @@ void PositionMirror(Mirror& m) {
     if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\WirelessBattery", L"SecondaryTaskbarOffset", RRF_RT_REG_DWORD, nullptr, &offset, &sz) ==
         ERROR_SUCCESS)
         right -= Px((int)offset);
-    int left = right - m.size.cx - Px(2);
+    int left = right - length - Px(2);
     g_dpiBar = nullptr;
-    if (!known || m.size.cx <= 0 || left < minLeft) { HideMirror(m); return; }
-    POINT p{ left, bar.top };
+    if (!known || length <= 0 || left < minLeft) { HideMirror(m); return; }
+    POINT p = v ? POINT{ bar.left, left } : POINT{ left, bar.top };
     ScreenToClient(m.bar, &p);
+    int along = v ? p.y : p.x;
     bool covered = GetWindow(m.wnd, GW_HWNDPREV) != nullptr;
-    if (!covered && p.x == m.lastLeft) return;
-    m.lastLeft = p.x;
-    SetWindowPos(m.wnd, HWND_TOP, p.x, 0, m.size.cx, m.size.cy, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    if (!covered && along == m.lastLeft) return;
+    m.lastLeft = along;
+    RECT client{};
+    GetClientRect(m.bar, &client);
+    int x = v ? (int)std::max<LONG>(0, (client.right - m.size.cx) / 2) : p.x;
+    SetWindowPos(m.wnd, HWND_TOP, x, v ? p.y : 0, m.size.cx, m.size.cy, SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
 
 void AddTool(HWND w) {
@@ -706,8 +725,7 @@ std::vector<HWND> SecondaryTaskbars() {
     std::vector<HWND> out;
     for (HWND t = FindWindowExW(nullptr, nullptr, L"Shell_SecondaryTrayWnd", nullptr); t;
          t = FindWindowExW(nullptr, t, L"Shell_SecondaryTrayWnd", nullptr)) {
-        RECT r{};
-        if (IsWindowVisible(t) && GetWindowRect(t, &r) && r.right - r.left > r.bottom - r.top) out.push_back(t);  // horizontal only
+        if (IsWindowVisible(t)) out.push_back(t);  // horizontal or vertical: PositionMirror handles both
     }
     return out;
 }
