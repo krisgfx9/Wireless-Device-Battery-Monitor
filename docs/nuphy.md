@@ -1,4 +1,4 @@
-# NuPhy WH80 (USB cable and Bluetooth)
+# NuPhy WH80 (USB cable and Bluetooth) and VSPO! GEAR Gaming Keyboard Ver.2
 
 Hardware tested with `19F5:A011`, firmware release `0116`, interface 1,
 usage `0001:0000`, unnumbered 64-byte input/output payloads (65 bytes in Windows HID caps).
@@ -41,6 +41,62 @@ uncached read of standard GATT Battery Level (`180F` / `2A19`) also returned
 is a separate device/transport reading from the wired 100% observation; do not
 replace it with an assumed full value or rescale it. The reason for the differing
 firmware readings is not established.
+
+## VSPO! GEAR Gaming Keyboard Ver.2
+
+The VSPO! GEAR Gaming Keyboard Ver.2 (80% JIS, 91 keys; wired, 2.4 GHz and
+Bluetooth) uses the same vendor id and the same GetFunc battery byte. Its web
+driver, [vspogear-keyboard.app](https://vspogear-keyboard.app/), lists it as
+`VSPO 80HE JIS`:
+
+| Mode | HID ID | Status |
+|---|---|---|
+| 2.4 GHz receiver | `19F5:8F10` | hardware-tested |
+| USB cable | `19F5:A022` | hardware-tested (level not usable, see below) |
+| Bluetooth | `19F5:324A` | hardware-tested (Windows battery level) |
+
+The web driver's `getBattery()` reads GetFunc byte 32 of the active profile:
+`value & 7F` is the percentage, `value & 80` is the charging flag. The receiver
+exposes the same interface 1, usage `0001:0000` collection with 65-byte reports,
+so the unchanged WH80 request works:
+
+```text
+55 05 00 21 01 20 00 00  ->  AA 05 00 70 01 20 00 00 4F ...   (79%, not charging)
+```
+
+Reading the same byte for profiles 1..3 (offsets `0060`, `00A0`, `00E0`)
+returned the same live level as profile 0 (`4E`, 78%), so the driver keeps
+reading offset `0020` and does not need to query the active profile first.
+
+On the USB cable the keyboard exposes the same collection and answers the same
+request, but the level is fixed:
+
+```text
+55 05 00 21 01 20 00 00  ->  AA 05 00 85 01 20 00 00 64 ...   (100%, no charging bit)
+```
+
+The receiver read 78% just before plugging in and 77% right after switching
+back, and the charging bit stayed clear while the cable was attached. The
+vendor web driver also shows 100% as soon as the cable is plugged in, so this
+is how the firmware reports, not a read error. The
+driver therefore treats a valid cable reply only as "connected and on USB
+power": it reports no level and sets charging, so the tray keeps the last known
+level with a charging mark (the same handling as 8BitDo pads on a cable).
+While the cable is used the receiver does not answer.
+
+The cable and receiver entries share one device key. The cable is polled first,
+so a keyboard that answers on both is reported once, as wired.
+
+On Bluetooth the keyboard uses the same HID ID as the WH80, `19F5:324A`
+(release `0136`), and advertises the name `BT5.0 KB-2`. The existing keyboard
+override for that ID applies, and Windows reported **74%**, the same as the
+receiver just before switching. No driver change was needed. Because Bluetooth
+uses the Windows device container as its key, it is a separate tray entry from
+the receiver/cable one; *Rename device...* can give it a clearer name.
+
+Sleep and the real charging state have not been hardware-tested.
+
+## Driver checks
 
 The driver checks the exact product/interface/report sizes, response header,
 offset, length, checksum and percentage range. It uses a 400 ms response deadline

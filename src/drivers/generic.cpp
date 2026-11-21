@@ -139,7 +139,8 @@ DeviceKind KindFromCategory(const std::wstring& c) {
 //  * 3151:4013 Attack Shark K86 (Rongyuan firmware) over Bluetooth, from the reporter's --dump in
 //    krisgfx9/Wireless-Device-Battery-Monitor#168. Its USB ids are 3151:4011 / 4015 (OpenRGB issue 4074).
 //  * 19F5:324A NuPhy WH80 over Bluetooth, hardware-tested. Its two keyboard collections
-//    coexist with a mouse collection; USB cable mode uses 19F5:A011 instead.
+//    coexist with a mouse collection; USB cable mode uses 19F5:A011 instead. The VSPO! GEAR
+//    Gaming Keyboard Ver.2 uses the same id over Bluetooth (advertised as "BT5.0 KB-2"), hardware-tested.
 DeviceKind KindFromBleIds(USHORT vid, USHORT pid) {
     if (vid == 0x3151 && pid == 0x4013) return DeviceKind::Keyboard;
     if (vid == 0x19F5 && pid == 0x324A) return DeviceKind::Keyboard;
