@@ -393,8 +393,8 @@ The tray icon works natively on KDE Plasma; GNOME needs an AppIndicator host suc
 (install it plus `linux/wireless-battery.svg` and the binary into `~/.local/`).
 
 Phase 1 covers Logitech, Razer, SteelSeries, Corsair, HyperX, PlayStation, Cooler Master, Glorious,
-Finalmouse and the shared Kysona/Pulsar/ATK/G-Wolves protocols. Bluetooth/UPower fallbacks, HeadsetControl and
-the remaining vendors are planned follow-up phases.
+Finalmouse, Keychron, Ninjutso, Rapoo, Zebronics (3554:FC0A) and the shared Kysona/Pulsar/ATK/G-Wolves
+protocols. Bluetooth/UPower fallbacks, HeadsetControl and the remaining vendors are planned follow-up phases.
 
 ## Limitations
 

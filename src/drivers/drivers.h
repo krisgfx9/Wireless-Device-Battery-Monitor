@@ -64,6 +64,7 @@ const wchar_t *GWolvesModelName(USHORT pid);
 bool GWolvesIsCable(USHORT pid);
 
 // Vendor drivers (run in this order).
+void PollZebronics(PollContext& ctx);  // Zebronics / Compx 3554:FC0A mouse (Linux)
 void PollSinowealthReceiver(PollContext& ctx);  // Redragon M602-KS receiver (258A:002F)
 void PollDarkrim(PollContext& ctx);   // DARKRIM SHADOW receiver (3654:6901)
 void PollGlorious(PollContext& ctx);  // also Hitscan

@@ -16,6 +16,10 @@ GTK_LIBS   := $(shell $(PKGCONFIG) --libs gtk4 cairo)
 
 # Phase 1: famous vendors whose drivers only need the portable HID API.
 DRIVERS := \
+    src/drivers/zebronics.cpp \
+    src/drivers/keychron.cpp \
+    src/drivers/ninjutso.cpp \
+    src/drivers/rapoo.cpp \
     src/drivers/glorious.cpp \
     src/drivers/kysona.cpp \
     src/drivers/logitech.cpp \
