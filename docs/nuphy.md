@@ -94,7 +94,14 @@ receiver just before switching. No driver change was needed. Because Bluetooth
 uses the Windows device container as its key, it is a separate tray entry from
 the receiver/cable one; *Rename device...* can give it a clearer name.
 
-Sleep and the real charging state have not been hardware-tested.
+With auto sleep set to 1 minute in the web driver, the receiver still answered
+the same request 39 ms after 80 seconds without input, so sleep does not hide
+the keyboard. A poll can still miss: while the web driver was writing a setting
+the keyboard dropped out of the tray for one poll and came back on the next. The
+receiver entry therefore keeps the last level, dimmed, for up to 30 minutes
+(`graceSec` 1800, as other receiver drivers do).
+
+The real charging state has not been hardware-tested.
 
 ## Driver checks
 

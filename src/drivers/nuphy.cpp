@@ -37,14 +37,16 @@ struct NuphyProduct {
     const wchar_t* name;
     const wchar_t* via;
     bool cableFixedFull;  // the reply always says 100%, no charging flag, while the cable is attached
+    int graceSec;         // keep the last level, dimmed, if a later poll gets no valid reply
 };
 
 // The cable entry of a keyboard comes before its receiver, so a keyboard that answers on both
-// is reported once, as wired.
+// is reported once, as wired. The receiver can miss a poll (for example while the vendor web
+// driver writes settings), so it keeps the last level like other receivers do.
 constexpr NuphyProduct kNuphyProducts[] = {
-    { 0xA011, L"nuphy:WH80", L"NuPhy WH80", L"USB cable", false },
-    { 0xA022, L"vspo:keyboard-v2", L"VSPO! GEAR Gaming Keyboard Ver.2", L"USB cable", true },
-    { 0x8F10, L"vspo:keyboard-v2", L"VSPO! GEAR Gaming Keyboard Ver.2", L"2.4 GHz receiver", false },
+    { 0xA011, L"nuphy:WH80", L"NuPhy WH80", L"USB cable", false, 0 },
+    { 0xA022, L"vspo:keyboard-v2", L"VSPO! GEAR Gaming Keyboard Ver.2", L"USB cable", true, 0 },
+    { 0x8F10, L"vspo:keyboard-v2", L"VSPO! GEAR Gaming Keyboard Ver.2", L"2.4 GHz receiver", false, 1800 },
 };
 }  // namespace
 
@@ -79,6 +81,7 @@ void PollNuphy(PollContext& ctx) {
                 s.name = p.name;
                 s.kind = DeviceKind::Keyboard;
                 s.via = p.via;
+                s.graceSec = p.graceSec;
                 ctx.Add(s, vid, pid);
                 found = true;
                 break;
