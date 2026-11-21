@@ -290,6 +290,10 @@ bool PollLogitechDevice(PollContext& ctx, USHORT pid, const std::vector<const Hi
         s.kind = passthrough ? DeviceKind::Mouse : GuessKind(s.name);
 
         int r = h.Request(idx, 0x00, 0x10 | kSwId, { 0, 0, 0x5A }, p, err, false, 400);
+        // A paired receiver device in power saving can take about a second to answer (seen with a PRO X 2
+        // on its LIGHTSPEED receiver): without an answer, ask once more and wait longer. Empty slots answer
+        // at once with an error, so this only costs time for a device that is really there but slow.
+        if (r == -1 && idx != 0xFF && !passthrough) r = h.Request(idx, 0x00, 0x10 | kSwId, { 0, 0, 0x5A }, p, err, false, 1600);
         bool found = false;
         if (r == 1 && p.size() >= 3 && p[0] >= 2) {
             ReadNameAndType20(h, idx, s);
