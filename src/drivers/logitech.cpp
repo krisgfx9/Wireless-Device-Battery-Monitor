@@ -47,21 +47,24 @@ public:
         msg[3] = b3;
         size_t i = 4;
         for (BYTE v : params) if (i < msg.size()) msg[i++] = v;
+        l_.Flush();
+        s_.Flush();
         if (!(useLong ? l_ : s_).Write(msg)) return -1;
 
         ULONGLONG end = GetTickCount64() + timeoutMs;
         std::vector<BYTE> r;
         while ((LONGLONG)end - (LONGLONG)GetTickCount64() > 0) {
             for (HidDev* d : { &l_, &s_ }) {
-                if (!d->ok() || d->Read(r, 15) < 7) continue;
-                if ((r[0] != 0x10 && r[0] != 0x11) || r[1] != idx) continue;
-                if (r[2] == b2 && r[3] == b3) {
-                    p.assign(r.begin() + 4, r.end());
-                    return 1;
-                }
-                if ((r[2] == 0xFF || r[2] == 0x8F) && r[3] == b2 && r[4] == b3) {
-                    err = r[5];
-                    return 0;
+                while (d->ok() && (LONGLONG)end - (LONGLONG)GetTickCount64() > 0 && d->Read(r, 15) >= 7) {
+                    if ((r[0] != 0x10 && r[0] != 0x11) || r[1] != idx) continue;
+                    if (r[2] == b2 && r[3] == b3) {
+                        p.assign(r.begin() + 4, r.end());
+                        return 1;
+                    }
+                    if ((r[2] == 0xFF || r[2] == 0x8F) && r[3] == b2 && r[4] == b3) {
+                        err = r[5];
+                        return 0;
+                    }
                 }
             }
         }
@@ -289,7 +292,11 @@ bool PollLogitechDevice(PollContext& ctx, USHORT pid, const std::vector<const Hi
         s.graceSec = idx == 0xFF ? 0 : 1800;  // receiver devices drop off the link while sleeping
         s.kind = passthrough ? DeviceKind::Mouse : GuessKind(s.name);
 
-        int r = h.Request(idx, 0x00, 0x10 | kSwId, { 0, 0, 0x5A }, p, err, false, 400);
+        // Logi Bolt (BLE-based) keyboards/mice can take ~600-800 ms to wake from BLE peripheral
+        // latency on the initial ping when idle, whereas empty or offline receiver slots immediately
+        // return a 0x8F error from the receiver in ~20 ms.
+        int pingTimeoutMs = (idx == 0xFF) ? 400 : 1000;
+        int r = h.Request(idx, 0x00, 0x10 | kSwId, { 0, 0, 0x5A }, p, err, false, pingTimeoutMs);
         bool found = false;
         if (r == 1 && p.size() >= 3 && p[0] >= 2) {
             ReadNameAndType20(h, idx, s);
