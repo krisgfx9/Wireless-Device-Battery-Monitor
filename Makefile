@@ -104,6 +104,10 @@ test: test-update-core test-update-win test-update-signature
 	./build/logitech_g435_0adf_test.exe
 	$(CXX) -std=c++17 -O2 -Wall -Isrc tests/xenta_protocol_test.cpp src/drivers/xenta_protocol.cpp -o build/xenta_protocol_test.exe
 	./build/xenta_protocol_test.exe
+	$(CXX) -std=c++17 -O2 -Wall -Wextra tests/incott_protocol_test.cpp -o build/incott_protocol_test.exe
+	./build/incott_protocol_test.exe
+	$(CXX) $(CXXFLAGS) -Isrc tests/incott_driver_test.cpp src/drivers/misc_mice.cpp src/drivers/xenta_protocol.cpp -o build/incott_driver_test.exe
+	./build/incott_driver_test.exe
 	$(CXX) -std=c++17 -O2 -Wall tests/labels_test.cpp src/labels.cpp -o build/labels_test.exe
 	./build/labels_test.exe
 	$(CXX) $(CXXFLAGS) tests/brands_test.cpp src/brands.cpp -o build/brands_test.exe
