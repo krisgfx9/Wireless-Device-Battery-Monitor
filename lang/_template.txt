@@ -71,6 +71,7 @@ Clear device history =
 Clear battery history for this device? =
 Could not save history changes. =
 Hide last known / asleep devices = 
+Move to tray when no devices =
 Show disconnected devices =
 Dim sleeping devices =
 Record battery history =

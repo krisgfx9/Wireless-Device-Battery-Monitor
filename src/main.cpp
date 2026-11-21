@@ -46,6 +46,7 @@ constexpr UINT ALERT_ICON_ID = 2;
 enum MenuId : UINT {
     ID_REFRESH = 100, ID_AUTOSTART, ID_HIDE_LAST_KNOWN, ID_WIDGET_BACKGROUND, ID_EXIT, ID_MODE_WIDGET, ID_MODE_TRAY, ID_SUPPORT, ID_REPORT,
     ID_BRAND_COLORS, ID_STACKED, ID_SHOW_DISCONNECTED, ID_RECORD_HISTORY, ID_DIM_SLEEPING,
+    ID_TRAY_WHEN_EMPTY,
     ID_POLL_FIRST = 500,  // "Check battery every": ID_POLL_FIRST + 0..7
     ID_UPDATE = 200, ID_AUTO_UPDATE,
     ID_LANG_AUTO = 400, ID_LANG_ADD, ID_LANG_FIRST,  // "Language": ID_LANG_FIRST + 0..63
@@ -71,6 +72,8 @@ bool g_lightTaskbar;
 bool g_wantWidget = true;      // user's choice: taskbar widget (default) or tray icons
 bool g_useWidget = false;      // what is actually shown right now
 bool g_hideLastKnown = false;  // hide (last known) / asleep devices from taskbar and tray
+bool g_trayWhenEmpty = false;  // taskbar mode: swap the strip for the tray placeholder while no device is shown
+bool g_emptyToTray = false;    // that swap is in effect right now
 bool g_showDisconnectedDevices = false;  // opt-in, explicit driver-reported offline devices only
 bool g_dimSleeping = true;  // dim a sleeping device's last known value (menu option, on by default)
 bool g_recordHistory = true;  // save readings for "Battery history..." (menu option, on by default)
@@ -268,6 +271,8 @@ bool LoadWidgetMode() { return LoadBoolSetting(L"TaskbarWidget", true); }
 void SaveWidgetMode(bool on) { SaveBoolSetting(L"TaskbarWidget", on); }
 bool LoadHideLastKnown() { return LoadBoolSetting(L"HideLastKnownDevices", false); }
 void SaveHideLastKnown(bool on) { SaveBoolSetting(L"HideLastKnownDevices", on); }
+bool LoadTrayWhenEmpty() { return LoadBoolSetting(L"MoveToTrayWhenEmpty", false); }
+void SaveTrayWhenEmpty(bool on) { SaveBoolSetting(L"MoveToTrayWhenEmpty", on); }
 bool LoadShowDisconnectedDevices() { return LoadBoolSetting(L"ShowDisconnectedDevices", false); }
 void SaveShowDisconnectedDevices(bool on) { SaveBoolSetting(L"ShowDisconnectedDevices", on); }
 bool LoadDimSleeping() { return LoadBoolSetting(L"DimSleepingDevices", true); }
@@ -507,7 +512,7 @@ void ShowBatteryAlert(TrayEntry& e) {
 }
 
 void UpdatePlaceholder() {
-    if (g_useWidget) {
+    if (g_useWidget && !g_emptyToTray) {
         if (g_placeholder) { TrayDelete(PLACEHOLDER_ID); g_placeholder = false; }
         return;
     }
@@ -585,7 +590,7 @@ std::vector<TrayEntry*> OrderedEntries(bool shownOnly) {
 }
 
 void UpdateWidget() {
-    if (!g_useWidget) return;
+    if (!g_useWidget || !widget::Alive()) return;  // not alive while the strip is swapped for the tray
     std::vector<TrayEntry*> list = OrderedEntries(true);
     // Two devices of one kind share an icon: give each a tiny caption so they can be told apart.
     std::vector<LabelInput> labelIn;
@@ -614,6 +619,8 @@ void UpdateWidget() {
     if (tip.empty()) tip = std::wstring(L"BatteryHub: ") + T(L"No devices with battery info found");
     widget::SetItems(items, tip);
 }
+
+void Reconcile();
 
 void OnResults(std::vector<DeviceStatus>& results) {
     std::map<std::wstring, bool> seen;
@@ -657,19 +664,35 @@ void OnResults(std::vector<DeviceStatus>& results) {
             ++it;
         }
     }
+    Reconcile();  // react to the new device list now, not at the next timer tick
     UpdatePlaceholder();
     UpdateWidget();
 }
 
+bool NothingShown() {
+    for (const auto& [k, e] : g_entries)
+        if (IsShown(e)) return false;
+    return true;
+}
+
 // Makes the actual display match the chosen mode; falls back to tray icons if the taskbar
 // widget cannot be created (e.g. Explorer not ready yet). Called once a second.
+// With "Move to tray when no devices" the strip gives way to the tray placeholder while nothing is shown.
 void Reconcile() {
-    bool alive = g_wantWidget && widget::Alive();
-    if (g_wantWidget && !alive) alive = widget::Create(g_inst, g_hwnd, WM_WIDGET_CLICK, g_lightTaskbar);
-    if (!g_wantWidget) widget::Destroy();
-    bool changed = alive != g_useWidget;
-    g_useWidget = alive;
-    if (changed) {
+    // Taskbar mode, option on, nothing to show: the strip is replaced by the tray placeholder.
+    bool emptyToTray = g_wantWidget && g_trayWhenEmpty && NothingShown();
+    bool wasAlive = widget::Alive();
+    // Keep, create or remove the strip.
+    bool alive = g_wantWidget && !emptyToTray && wasAlive;
+    if (g_wantWidget && !emptyToTray && !alive) alive = widget::Create(g_inst, g_hwnd, WM_WIDGET_CLICK, g_lightTaskbar);
+    if (!g_wantWidget || emptyToTray) widget::Destroy();
+    // Stays in widget mode while swapped, so device icons are not added to the tray in between.
+    bool useWidget = alive || emptyToTray;
+    bool changed = useWidget != g_useWidget || emptyToTray != g_emptyToTray;
+    g_useWidget = useWidget;
+    g_emptyToTray = emptyToTray;
+    // Refresh after a change, or when the strip was just re-created.
+    if (changed || (alive && !wasAlive)) {
         for (auto& [k, e] : g_entries) ApplyEntry(e);
         UpdatePlaceholder();
         UpdateWidget();
@@ -696,6 +719,12 @@ void SetHideLastKnown(bool on) {
     for (auto& [k, e] : g_entries) ApplyEntry(e);
     UpdatePlaceholder();
     UpdateWidget();
+}
+
+void SetTrayWhenEmpty(bool on) {
+    g_trayWhenEmpty = on;
+    SaveTrayWhenEmpty(on);
+    Reconcile();
 }
 
 void SetShowDisconnectedDevices(bool on) {
@@ -867,6 +896,8 @@ void ShowMenu() {
         keys.push_back(k);
     }
     AppendMenuW(m, MF_STRING | (g_hideLastKnown ? MF_CHECKED : 0), ID_HIDE_LAST_KNOWN, T(L"Hide last known / asleep devices"));
+    UINT emptyFlags = MF_STRING | (g_trayWhenEmpty ? MF_CHECKED : 0) | (g_wantWidget ? 0 : MF_GRAYED);
+    AppendMenuW(m, emptyFlags, ID_TRAY_WHEN_EMPTY, T(L"Move to tray when no devices"));
     AppendMenuW(m, MF_STRING | (g_showDisconnectedDevices ? MF_CHECKED : 0), ID_SHOW_DISCONNECTED, T(L"Show disconnected devices"));
     AppendMenuW(m, MF_STRING | (g_dimSleeping ? MF_CHECKED : 0), ID_DIM_SLEEPING, T(L"Dim sleeping devices"));
     AppendMenuW(m, MF_STRING | (g_recordHistory ? MF_CHECKED : 0), ID_RECORD_HISTORY, T(L"Record battery history"));
@@ -954,6 +985,7 @@ void ShowMenu() {
         case ID_REFRESH: SetEvent(g_refreshEvt); break;
         case ID_AUTOSTART: SetAutostart(!AutostartEnabled()); break;
         case ID_HIDE_LAST_KNOWN: SetHideLastKnown(!g_hideLastKnown); break;
+        case ID_TRAY_WHEN_EMPTY: SetTrayWhenEmpty(!g_trayWhenEmpty); break;
         case ID_SHOW_DISCONNECTED: SetShowDisconnectedDevices(!g_showDisconnectedDevices); break;
         case ID_DIM_SLEEPING: SetDimSleeping(!g_dimSleeping); break;
         case ID_RECORD_HISTORY: g_recordHistory = !g_recordHistory; SaveRecordHistory(g_recordHistory); break;
@@ -1284,6 +1316,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     g_stopEvt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_wantWidget = LoadWidgetMode();
     g_hideLastKnown = LoadHideLastKnown();
+    g_trayWhenEmpty = LoadTrayWhenEmpty();
     g_showDisconnectedDevices = LoadShowDisconnectedDevices();
     g_dimSleeping = LoadDimSleeping();
     g_recordHistory = LoadRecordHistory();
