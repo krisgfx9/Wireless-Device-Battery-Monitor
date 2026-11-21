@@ -3,7 +3,10 @@
 // getBatteryState(0): GetFunc (05), offset 0020, one byte. Only this GET is sent.
 // Unnumbered 64-byte reports on usage 0001:0000, interface 1:
 //   55 05 00 21 01 20 00 00 ... -> AA 05 00 checksum 01 20 00 00 value ...
-// Checksum is the low byte of the sum of bytes 4..63. Value: bit 7 charging,
+// Checksum is the low byte of the sum of the length, offset and data bytes (4..8 for this one-byte
+// read). The padding after the data is not covered: the VSPO receiver was seen returning leftover
+// bytes there (AA 05 00 6B 01 20 00 00 4A 00 00 C2 00 00 C2 ...) after the web driver wrote a
+// setting, and summing the padding rejected every reply. Value: bit 7 charging,
 // bits 0..6 percentage (WH80 reports in 10% steps). WH80 Bluetooth/receiver untested.
 //
 // VSPO! GEAR Gaming Keyboard Ver.2 (80% JIS, "VSPO 80HE JIS" in its web driver) uses the same
@@ -24,7 +27,7 @@ bool BatteryReply(const std::vector<BYTE>& r, int& percent, bool& charging) {
     if (r.size() != 64 || r[0] != 0xAA || r[1] != 0x05 || r[2] != 0 || r[4] != 1 ||
         r[5] != 0x20 || r[6] != 0 || r[7] != 0) return false;
     unsigned sum = 0;
-    for (size_t i = 4; i < r.size(); ++i) sum += r[i];
+    for (size_t i = 4; i <= 8; ++i) sum += r[i];
     if ((sum & 0xFF) != r[3] || (r[8] & 0x7F) > 100) return false;
     percent = r[8] & 0x7F;
     charging = (r[8] & 0x80) != 0;

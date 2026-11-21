@@ -20,7 +20,10 @@ Actual reply payload:
 AA 05 00 05 01 20 00 00 E4 00 ...
 ```
 
-Byte 3 is the low byte of the sum of bytes 4..63. Battery is byte 8:
+Byte 3 is the low byte of the sum of the length, offset and data bytes
+(4..8 for this one-byte read). The padding after the data is not covered: it is
+zero here, but the VSPO receiver can return leftover bytes there (see below).
+Battery is byte 8:
 `value & 7F` is percentage, `value & 80` is the SDK charging flag.
 The native C++ driver returned **100%, charging** on the attached keyboard.
 Charging transitions and low/full boundaries have not been hardware tested;
@@ -100,6 +103,17 @@ the keyboard. A poll can still miss: while the web driver was writing a setting
 the keyboard dropped out of the tray for one poll and came back on the next. The
 receiver entry therefore keeps the last level, dimmed, for up to 30 minutes
 (`graceSec` 1800, as other receiver drivers do).
+
+After changing the auto sleep setting again, every reply carried leftover bytes
+after the data while the checksum still covered only bytes 4..8:
+
+```text
+AA 05 00 6B 01 20 00 00 4A 00 00 C2 00 00 C2 ...   (74%; 01+20+00+00+4A = 6B)
+```
+
+Summing the whole 64-byte report rejected each of these replies, so the keyboard
+stayed dimmed as asleep. The driver now checks the checksum over bytes 4..8 only;
+the header, offset, length and percentage range are still checked as before.
 
 The real charging state has not been hardware-tested.
 
