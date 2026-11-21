@@ -163,5 +163,6 @@ void PollScyrox(PollContext& ctx);        // Scyrox V12M on its 2.4 GHz receiver
 void PollHeadsetControl(PollContext &ctx); // only if headsetcontrol.exe is installed
 void PollGenericHid(PollContext &ctx);
 void PollBluetooth(PollContext &ctx);
+void PollArmorX(PollContext &ctx);  // BigBigWon Armor X Pro over Bluetooth LE (before PollXInput)
 void PollXInput(PollContext &ctx);
 void PollMaono(PollContext &ctx);

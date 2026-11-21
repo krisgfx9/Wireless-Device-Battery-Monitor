@@ -1173,6 +1173,7 @@ int ListToConsole(bool dump) {
         }
         return 0;
     }
+    g_armorxFirstWaitMs = 30000;  // one-shot run: no earlier polls have heard the controller yet
     auto list = PollAllDevices();
     if (list.empty()) write(L"No devices with battery info found.\n");
     for (auto& s : list) {
@@ -1281,6 +1282,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     HDEVNOTIFY notify = RegisterDeviceNotificationW(g_hwnd, &filter, DEVICE_NOTIFY_WINDOW_HANDLE);
 
     g_refreshEvt = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    g_armorxHeard = [] { SetEvent(g_refreshEvt); };
     g_stopEvt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_wantWidget = LoadWidgetMode();
     g_hideLastKnown = LoadHideLastKnown();
