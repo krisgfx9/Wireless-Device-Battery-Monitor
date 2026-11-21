@@ -286,4 +286,87 @@ ReleaseResult ParseRelease(const std::string& json, const Version& current, Rele
     if (signatureMatches != 1) { out.signatureUrl.clear(); out.signatureSize = 0; }
     return ReleaseResult::Available;
 }
+
+bool ParseExperimentalSeelenRelease(const std::string& json, ReleaseInfo& out) {
+    constexpr const char* repository = "ISOByte00/Wireless-Device-Battery-Monitor-Seelen-UI";
+    constexpr const char* sums = "SHA256SUMS.txt";
+    out = {};
+    Json root;
+    if (!Parser(json).Parse(root) || root.type != Json::Array) return false;
+
+    bool found = false;
+    for (const Json& release : root.array) {
+        const Json* releaseTag = release.Get("tag_name", Json::String);
+        const Json* draft = release.Get("draft", Json::Boolean);
+        const Json* page = release.Get("html_url", Json::String);
+        const Json* assets = release.Get("assets", Json::Array);
+        Version version;
+        if (!releaseTag || !draft || !page || !assets || draft->boolean ||
+            !ParseVersion(releaseTag->text, version)) continue;
+        std::string versionText = VersionText(version);
+        std::string tag = "v" + versionText;
+        if (releaseTag->text != tag ||
+            page->text != std::string("https://github.com/") + repository + "/releases/tag/" + tag) continue;
+
+        std::string setup = "BatteryHub-Seelen-Setup-" + versionText + ".exe";
+        std::string base = std::string("https://github.com/") + repository + "/releases/download/" + tag + "/";
+        ReleaseInfo candidate;
+        candidate.version = version;
+        candidate.tag = tag;
+        candidate.page = page->text;
+        candidate.assetName = setup;
+        unsigned setupMatches = 0, sumsMatches = 0;
+        for (const Json& asset : assets->array) {
+            const Json* name = asset.Get("name", Json::String);
+            if (!name) continue;
+            if (name->text == setup) ++setupMatches;
+            else if (name->text == sums) ++sumsMatches;
+            const Json* state = asset.Get("state", Json::String);
+            const Json* url = asset.Get("browser_download_url", Json::String);
+            const Json* size = asset.Get("size", Json::Number);
+            if (!state || !url || !size || state->text != "uploaded") continue;
+            std::uint64_t bytes = 0;
+            if (!AssetSize(*size, bytes) || url->text != base + name->text) continue;
+            if (name->text == setup) {
+                const Json* digest = asset.Get("digest", Json::String);
+                std::string hash;
+                if (digest && ValidDigest(digest->text, hash)) {
+                    candidate.download = url->text;
+                    candidate.sha256 = hash;
+                    candidate.size = bytes;
+                }
+            } else if (name->text == sums && bytes <= 64 * 1024) {
+                candidate.sumsUrl = url->text;
+                candidate.sumsSize = bytes;
+            }
+        }
+        if (setupMatches != 1 || sumsMatches != 1 || candidate.download.empty() || candidate.sumsUrl.empty()) continue;
+        if (!found || Newer(candidate.version, out.version)) {
+            out = std::move(candidate);
+            found = true;
+        }
+    }
+    return found;
+}
+
+bool ChecksumHash(const std::string& sums, const std::string& filename, std::string& hash) {
+    hash.clear();
+    size_t line = 0;
+    unsigned matches = 0;
+    while (line < sums.size()) {
+        size_t end = sums.find('\n', line);
+        if (end == std::string::npos) end = sums.size();
+        size_t length = end - line;
+        if (length && sums[line + length - 1] == '\r') --length;
+        if (length == 66 + filename.size() && sums.compare(line + 64, 2, "  ") == 0 &&
+            sums.compare(line + 66, filename.size(), filename) == 0) {
+            std::string candidate;
+            if (!ValidDigest("sha256:" + sums.substr(line, 64), candidate)) return false;
+            hash = candidate;
+            ++matches;
+        }
+        line = end + 1;
+    }
+    return matches == 1;
+}
 }

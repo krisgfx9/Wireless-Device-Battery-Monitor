@@ -13,6 +13,8 @@
 
 Battery levels of your wireless mouse, headset, keyboard and controller, right on the Windows taskbar.
 
+> This fork can detect a running Seelen UI once and offer a link to its optional Seelen-enabled fork build. That build is not an official BatteryHub release. The standard application never starts a Seelen bridge, installs a plugin, downloads, or runs an EXE automatically.
+
 ![BatteryHub on the taskbar](docs/screenshot.png)
 
 > **Just want it working?** Download **[BatteryHub-Setup](https://github.com/krisgfx9/Wireless-Device-Battery-Monitor/releases/latest)** from the latest release. Use the per-user installation for setup without administrator rights; see the [installation notes](#install) for unsigned-app warnings and the all-users option.

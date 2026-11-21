@@ -97,5 +97,26 @@ int main() {
     for (const auto* url : { L"http://github.com/a", L"https://github.com.evil/a", L"https://user@github.com/a",
                              L"https://github.com:443/a", L"https://github.com/a#x", L"https://github.com/a\r\nx" })
         assert(!AllowedDownloadUrl(url));
+    auto SeelenRelease = [](const std::string& version, char digest, bool draft = false, bool includeSetup = true) {
+        std::string tag = "v" + version;
+        std::string base = "https://github.com/ISOByte00/Wireless-Device-Battery-Monitor-Seelen-UI/releases/download/" + tag + "/";
+        std::string assets;
+        if (includeSetup) assets = "{\"name\":\"BatteryHub-Seelen-Setup-" + version + ".exe\",\"state\":\"uploaded\",\"size\":42,\"digest\":\"sha256:" +
+            std::string(64, digest) + "\",\"browser_download_url\":\"" + base + "BatteryHub-Seelen-Setup-" + version + ".exe\"},";
+        assets += "{\"name\":\"SHA256SUMS.txt\",\"state\":\"uploaded\",\"size\":99,\"browser_download_url\":\"" + base + "SHA256SUMS.txt\"}";
+        return "{\"tag_name\":\"" + tag + "\",\"draft\":" + (draft ? "true" : "false") +
+            ",\"prerelease\":true,\"html_url\":\"https://github.com/ISOByte00/Wireless-Device-Battery-Monitor-Seelen-UI/releases/tag/" + tag + "\",\"assets\":[" + assets + "]}";
+    };
+    const std::string experimental = "[" + SeelenRelease("0.2.0", 'b') + "," + SeelenRelease("0.10.0", 'c') +
+        "," + SeelenRelease("0.11.0", 'd', true) + "," + SeelenRelease("0.12.0", 'e', false, false) +
+        ",{\"tag_name\":\"atk-mercury-v0.1\",\"draft\":false,\"html_url\":\"https://github.com/ISOByte00/Wireless-Device-Battery-Monitor-Seelen-UI/releases/tag/atk-mercury-v0.1\",\"assets\":[]}]";
+    assert(ParseExperimentalSeelenRelease(experimental, result));
+    assert(result.tag == "v0.10.0" && result.assetName == "BatteryHub-Seelen-Setup-0.10.0.exe");
+    assert(result.sha256 == std::string(64, 'c'));
+    std::string checksum;
+    assert(ChecksumHash(std::string(64, 'c') + "  BatteryHub-Seelen-Setup-0.10.0.exe\n", result.assetName, checksum));
+    assert(checksum == std::string(64, 'c'));
+    assert(!ChecksumHash(std::string(64, 'c') + " *BatteryHub-Seelen-Setup-0.10.0.exe\n", result.assetName, checksum));
+    assert(!ParseExperimentalSeelenRelease("[]", result));
     std::puts("Update core tests passed (versions, strict JSON, release and asset validation).");
 }

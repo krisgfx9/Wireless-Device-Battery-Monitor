@@ -1,9 +1,11 @@
 // BatteryHub - tray app showing the battery level of wireless mice, headsets and Bluetooth devices.
 #include <windows.h>
 #include <shellapi.h>
+#include <commctrl.h>
 #include <dbt.h>
 #include <initguid.h>
 #include <hidclass.h>
+#include <tlhelp32.h>
 
 #include <algorithm>
 #include <atomic>
@@ -47,7 +49,7 @@ enum MenuId : UINT {
     ID_REFRESH = 100, ID_AUTOSTART, ID_HIDE_LAST_KNOWN, ID_WIDGET_BACKGROUND, ID_EXIT, ID_MODE_WIDGET, ID_MODE_TRAY, ID_SUPPORT, ID_REPORT,
     ID_BRAND_COLORS, ID_STACKED, ID_SHOW_DISCONNECTED, ID_RECORD_HISTORY, ID_DIM_SLEEPING,
     ID_POLL_FIRST = 500,  // "Check battery every": ID_POLL_FIRST + 0..7
-    ID_UPDATE = 200, ID_AUTO_UPDATE,
+    ID_UPDATE = 200, ID_AUTO_UPDATE, ID_SEELEN_INTEGRATION,
     ID_LANG_AUTO = 400, ID_LANG_ADD, ID_LANG_FIRST,  // "Language": ID_LANG_FIRST + 0..63
     ID_MONITOR_ALL = 300, ID_MONITOR_MAIN, ID_MONITOR_FIRST,  // "Show the widget on": ID_MONITOR_FIRST + 0..31
     ID_DEVICE_FIRST = 1000
@@ -67,6 +69,7 @@ HINSTANCE g_inst;
 HWND g_hwnd;
 HANDLE g_refreshEvt, g_stopEvt, g_worker;
 UINT g_taskbarCreatedMsg;
+UINT g_showSeelenPromptMsg;
 bool g_lightTaskbar;
 bool g_wantWidget = true;      // user's choice: taskbar widget (default) or tray icons
 bool g_useWidget = false;      // what is actually shown right now
@@ -78,6 +81,7 @@ std::wstring g_widgetMonitor = L"all";  // which taskbars show the widget: "all"
 bool g_widgetBackground = false;  // draw a plate behind the taskbar text (transparent taskbar themes)
 bool g_stacked = false;      // icon above the percentage (menu option)
 bool g_brandColors = false;  // off by default; known brands get their color (Razer green, Logitech blue, ...)
+bool g_seelenPrompted = false;
 std::atomic<DWORD> g_pollIntervalMs{ 60 * 1000 };  // set from the menu, read by the worker thread
 
 struct TrayEntry {
@@ -221,6 +225,65 @@ bool LoadBoolSetting(const wchar_t* name, bool defaultVal) {
 void SaveBoolSetting(const wchar_t* name, bool on) {
     DWORD v = on ? 1 : 0;
     RegSetKeyValueW(HKEY_CURRENT_USER, kSettingsKey, name, REG_DWORD, &v, sizeof(v));
+}
+
+bool IsSeelenRunning() {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return false;
+    PROCESSENTRY32W process{ sizeof(process) };
+    bool found = false;
+    if (Process32FirstW(snapshot, &process)) {
+        do {
+            if (_wcsicmp(process.szExeFile, L"seelen-ui.exe") == 0) {
+                found = true;
+                break;
+            }
+        } while (Process32NextW(snapshot, &process));
+    }
+    CloseHandle(snapshot);
+    return found;
+}
+
+HRESULT CALLBACK ForegroundDialog(HWND dialog, UINT notification, WPARAM, LPARAM, LONG_PTR) {
+    if (notification == TDN_CREATED) {
+        SetWindowPos(dialog, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        SetForegroundWindow(dialog);
+    }
+    return S_OK;
+}
+
+void OfferSeelenIntegration(bool fromMenu = false) {
+    bool seelenRunning = IsSeelenRunning();
+    if (!fromMenu && (g_seelenPrompted || !seelenRunning)) return;
+
+    TASKDIALOG_BUTTON buttons[] = {{ IDYES, T(L"Download the Seelen version") }, { IDNO, T(L"Not now") }};
+    TASKDIALOGCONFIG dialog{ sizeof(dialog) };
+    // g_hwnd is deliberately hidden; an invisible owner can leave TaskDialog behind
+    // the foreground window.  Use no owner so the prompt is always foreground-visible.
+    dialog.hwndParent = nullptr;
+    dialog.dwFlags = i18n::Rtl() ? TDF_RTL_LAYOUT : 0;
+    dialog.pszWindowTitle = kAppName;
+    dialog.pszMainInstruction = seelenRunning ? T(L"Seelen UI detected") : T(L"Seelen UI was not detected");
+    dialog.pszContent = seelenRunning
+        ? T(L"You're using Seelen UI. The standard BatteryHub taskbar indicator may not be visible.\n\nInstall the Seelen-compatible version to display device battery levels in the Fancy Toolbar.")
+        : T(L"Seelen UI does not appear to be running, but you can still download the optional Seelen integration build.");
+    dialog.pButtons = buttons;
+    dialog.cButtons = ARRAYSIZE(buttons);
+    dialog.nDefaultButton = IDNO;
+    dialog.pszFooter = T(L"Unofficial integration fork. The installer is verified before you are asked to run it.");
+    dialog.pfCallback = ForegroundDialog;
+    int choice = IDNO;
+    HRESULT shown = TaskDialogIndirect(&dialog, &choice, nullptr, nullptr);
+    if (FAILED(shown)) {
+        MessageBoxW(nullptr, T(L"Could not show the Seelen UI integration dialog. Please try the menu again."), kAppName,
+                    MB_OK | MB_ICONERROR);
+        return;
+    }
+    if (choice != IDYES && choice != IDNO) return;
+    g_seelenPrompted = true;
+    SaveBoolSetting(L"SeelenIntegrationPrompted", true);
+    if (choice == IDYES)
+        updates::DownloadSeelenInstaller(g_hwnd);
 }
 
 // A REG_MULTI_SZ with one "device-key<TAB>threshold" entry per override.
@@ -938,6 +1001,11 @@ void ShowMenu() {
     AppendMenuW(m, MF_STRING, ID_SUPPORT, T(L"Support the project..."));
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING | (updates::Busy() ? MF_GRAYED : 0), ID_UPDATE, updates::MenuLabel().c_str());
+    {
+        HMENU sub = CreatePopupMenu();
+        AppendMenuW(sub, MF_STRING, ID_SEELEN_INTEGRATION, T(L"Seelen UI integration..."));
+        AppendMenuW(m, MF_POPUP, (UINT_PTR)sub, T(L"3rd Party"));
+    }
     UINT updateFlags = MF_STRING | (updates::AutomaticEnabled() ? MF_CHECKED : 0) |
                        (updates::Supported() ? 0 : MF_GRAYED);
     AppendMenuW(m, updateFlags, ID_AUTO_UPDATE, T(L"Automatically check for updates"));
@@ -966,6 +1034,7 @@ void ShowMenu() {
         case ID_STACKED: SetStacked(!g_stacked); break;
         case ID_MODE_WIDGET: SetMode(true); break;
         case ID_MODE_TRAY: SetMode(false); break;
+        case ID_SEELEN_INTEGRATION: OfferSeelenIntegration(true); break;
         case ID_SUPPORT: ShellExecuteW(nullptr, L"open", L"https://github.com/sponsors/krisgfx9", nullptr, nullptr, SW_SHOWNORMAL); break;
         case ID_REPORT: report::Show(g_inst, g_hwnd); break;
         case ID_UPDATE: updates::Activate(g_hwnd); break;
@@ -1073,6 +1142,10 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         KillTimer(g_hwnd, TIMER_ALERT_ICON);
         ReAddAll();
         Reconcile();
+        return 0;
+    }
+    if (msg == g_showSeelenPromptMsg && msg != 0) {
+        OfferSeelenIntegration();
         return 0;
     }
     switch (msg) {
@@ -1257,9 +1330,16 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     }
     g_inst = inst;
     g_demo = cmdLine && wcsstr(cmdLine, L"--demo");
+    g_showSeelenPromptMsg = RegisterWindowMessageW(L"BatteryHub.ShowSeelenIntegrationPrompt");
 
     HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Local\\WirelessBatteryTray");
-    if (GetLastError() == ERROR_ALREADY_EXISTS) return 0;
+    if (!mutex) return 1;
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        if (HWND existing = FindWindowW(L"WirelessBatteryWnd", nullptr))
+            PostMessageW(existing, g_showSeelenPromptMsg, 0, 0);
+        CloseHandle(mutex);
+        return 0;
+    }
     updates::Initialize();
 
     g_lightTaskbar = ReadLightTaskbar();
@@ -1290,6 +1370,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     g_widgetBackground = LoadWidgetBackground();
     g_brandColors = LoadBrandColors();
     g_stacked = LoadStacked();
+    g_seelenPrompted = LoadBoolSetting(L"SeelenIntegrationPrompted", false);
     g_pollIntervalMs = LoadPollSeconds() * 1000;
     widget::SetStacked(g_stacked);
     widget::SetBackground(g_widgetBackground);  // remembered by the widget across re-creation
@@ -1301,6 +1382,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     LoadAliases();
     LoadAlertThresholds();
     battery_history::Initialize(g_demo);
+    OfferSeelenIntegration();
     Reconcile();
     UpdatePlaceholder();  // something to click on until the first poll finishes
     SetTimer(g_hwnd, TIMER_WIDGET, 1000, nullptr);
@@ -1317,5 +1399,6 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     if (notify) UnregisterDeviceNotification(notify);
     if (g_worker) CloseHandle(g_worker);
     ReleaseMutex(mutex);
+    CloseHandle(mutex);
     return 0;
 }

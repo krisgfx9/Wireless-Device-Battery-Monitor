@@ -164,6 +164,53 @@ Result FetchRelease() {
     return out;
 }
 
+Result FetchExperimentalSeelenRelease() {
+    Result out;
+    constexpr const wchar_t* endpoint = L"/repos/ISOByte00/Wireless-Device-Battery-Monitor-Seelen-UI/releases?per_page=100";
+    ULONGLONG deadline = GetTickCount64() + 30000;
+    HINTERNET session = WinHttpOpen(L"BatteryHub/Seelen", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                                   WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!session || !WinHttpSetTimeouts(session, 5000, 5000, 5000, 5000)) {
+        if (session) WinHttpCloseHandle(session);
+        out.error = L"Could not initialize the Windows network connection.";
+        return out;
+    }
+    HINTERNET connection = WinHttpConnect(session, L"api.github.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
+    HINTERNET req = connection ? WinHttpOpenRequest(connection, L"GET", endpoint, nullptr,
+        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE) : nullptr;
+    DWORD redirect = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+    const wchar_t* headers = L"Accept: application/vnd.github+json\r\nX-GitHub-Api-Version: 2022-11-28\r\n";
+    bool configured = req && WinHttpSetOption(req, WINHTTP_OPTION_REDIRECT_POLICY, &redirect, sizeof(redirect));
+    if (configured && !cancelled && WinHttpSendRequest(req, headers, (DWORD)-1, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+        !cancelled && GetTickCount64() < deadline && WinHttpReceiveResponse(req, nullptr)) {
+        DWORD status = 0, size = sizeof(status);
+        WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &status, &size, nullptr);
+        if (status == 200) {
+            std::string body;
+            char buffer[8192];
+            DWORD bytes = 0;
+            bool complete = false;
+            while (!cancelled && GetTickCount64() < deadline) {
+                if (!WinHttpReadData(req, buffer, sizeof(buffer), &bytes)) break;
+                if (!bytes) { complete = true; break; }
+                body.append(buffer, bytes);
+                if (body.size() > 1024 * 1024) break;
+            }
+            if (complete && ParseExperimentalSeelenRelease(body, out.release)) {
+                out.success = true;
+                out.metadataValid = true;
+            } else out.error = L"The Seelen release or its required assets could not be verified.";
+        } else if (status == 404) out.error = L"The requested Seelen release was not found.";
+        else out.error = L"GitHub could not provide the Seelen release. Please try again later.";
+    }
+    if (!out.success && out.error.empty()) out.error = cancelled ? L"Download cancelled." :
+        L"Could not contact GitHub. Check your Internet connection and try again.";
+    if (req) WinHttpCloseHandle(req);
+    if (connection) WinHttpCloseHandle(connection);
+    WinHttpCloseHandle(session);
+    return out;
+}
+
 void StartCheck(bool requested) {
     if (Busy() || shuttingDown) return;
     manual = requested;
@@ -472,6 +519,43 @@ Result DownloadRelease() {
     return out;
 }
 
+Result DownloadExperimentalSeelenRelease() {
+    Result out = FetchExperimentalSeelenRelease(); // Do not execute cached release metadata.
+    if (!out.success) return out;
+    out.success = false;
+    ULONGLONG deadline = GetTickCount64() + 600000;
+    std::string sums, checksum;
+    if (!GetText(out.release.sumsUrl, out.release.sumsSize, deadline, sums) ||
+        !ChecksumHash(sums, out.release.assetName, checksum) || checksum != out.release.sha256) {
+        out.error = cancelled ? L"Download cancelled." :
+            L"The Seelen release checksum could not be verified. Nothing was installed.";
+        return out;
+    }
+    std::wstring directory = NewDownloadDirectory();
+    if (directory.empty()) { out.error = L"Could not create a temporary download folder."; return out; }
+    std::wstring partial = directory + L"\\seelen-setup.part";
+    std::wstring final = directory + L"\\" + Widen(out.release.assetName);
+    HANDLE file = CreateFileW(partial.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    bool complete = file != INVALID_HANDLE_VALUE && HttpGet(Widen(out.release.download), out.release.size, deadline, true,
+        [&](const char* data, DWORD n) {
+            DWORD written = 0;
+            return WriteFile(file, data, n, &written, nullptr) && written == n;
+        });
+    if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+    if (complete && !cancelled && VerifyFile(partial, out.release.sha256, out.release.size) &&
+        MoveFileW(partial.c_str(), final.c_str())) {
+        out.success = true;
+        out.error.clear();
+        out.file = final;
+    } else {
+        DeleteFileW(partial.c_str());
+        RemoveDirectoryW(directory.c_str());
+        out.error = cancelled ? L"Download cancelled." :
+            L"The Seelen installer could not be downloaded or verified. Nothing was installed.";
+    }
+    return out;
+}
+
 struct DownloadDialogState { bool automaticClose = false; };
 
 HRESULT CALLBACK DownloadDialog(HWND dialog, UINT notification, WPARAM button, LPARAM, LONG_PTR context) {
@@ -541,6 +625,12 @@ void DownloadAndInstall(HWND owner) {
     else operation = Operation::Installing;
 }
 
+void DeleteExperimentalDownload(const std::wstring& file) {
+    DeleteFileW(file.c_str());
+    size_t slash = file.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) RemoveDirectoryW(file.substr(0, slash).c_str());
+}
+
 void ShowAvailable(HWND owner) {
     if (Busy() || shuttingDown) return;
     Installation installed = FindInstallation(ExecutablePath());
@@ -568,6 +658,64 @@ void ShowAvailable(HWND owner) {
         if (clicked == 100) DownloadAndInstall(owner);
     }
 }
+}
+
+void DownloadSeelenInstaller(HWND owner) {
+    if (Busy() || shuttingDown) return;
+    operation = Operation::Downloading;
+    cancelled = false;
+    done = false;
+    progress = 0;
+    worker = std::thread([] {
+        Result downloaded = DownloadExperimentalSeelenRelease();
+        { std::lock_guard<std::mutex> lock(resultMutex); result = std::move(downloaded); }
+        done = true;
+    });
+    DownloadDialogState state;
+    TASKDIALOGCONFIG progressDialog{ sizeof(progressDialog) };
+    progressDialog.hwndParent = DialogOwner(owner);
+    progressDialog.dwFlags = TDF_SHOW_PROGRESS_BAR | TDF_CALLBACK_TIMER;
+    progressDialog.dwCommonButtons = TDCBF_CANCEL_BUTTON;
+    progressDialog.pszWindowTitle = T(L"BatteryHub Seelen integration");
+    progressDialog.pszMainInstruction = T(L"Downloading and verifying the Seelen version");
+    progressDialog.pszContent = T(L"The installer is downloaded only from the ISOByte00 GitHub release.");
+    progressDialog.pfCallback = DownloadDialog;
+    progressDialog.lpCallbackData = reinterpret_cast<LONG_PTR>(&state);
+    if (FAILED(TaskDialogIndirect(&progressDialog, nullptr, nullptr, nullptr))) Cancel();
+    if (worker.joinable()) worker.join();
+    done = false;
+    Result downloaded;
+    { std::lock_guard<std::mutex> lock(resultMutex); downloaded = std::move(result); }
+    operation = Operation::Idle;
+    if (!downloaded.success || cancelled || shuttingDown) {
+        if (!cancelled && !shuttingDown) ShowMessage(owner, downloaded.error.c_str());
+        if (!downloaded.file.empty()) DeleteExperimentalDownload(downloaded.file);
+        return;
+    }
+    TASKDIALOG_BUTTON buttons[] = {{ IDYES, T(L"Run installer") }, { IDNO, T(L"Cancel and delete") }};
+    TASKDIALOGCONFIG confirm{ sizeof(confirm) };
+    confirm.hwndParent = DialogOwner(owner);
+    std::wstring versionTitle = L"BatteryHub Seelen v" + Widen(VersionText(downloaded.release.version));
+    std::wstring mainInstruction = TF(L"{version} is verified", { { L"version", versionTitle } });
+    std::wstring confirmText = TF(L"Run {installer} now?\n\nThis unofficial integration fork passed both the GitHub asset digest and SHA256SUMS.txt verification.",
+                                  { { L"installer", Widen(downloaded.release.assetName) } });
+    confirm.pszWindowTitle = versionTitle.c_str();
+    confirm.pszMainInstruction = mainInstruction.c_str();
+    confirm.pszContent = confirmText.c_str();
+    confirm.pButtons = buttons;
+    confirm.cButtons = ARRAYSIZE(buttons);
+    confirm.nDefaultButton = IDNO;
+    int choice = IDNO;
+    HRESULT shown = TaskDialogIndirect(&confirm, &choice, nullptr, nullptr);
+    if (FAILED(shown) || choice != IDYES || !VerifyFile(downloaded.file, downloaded.release.sha256, downloaded.release.size)) {
+        if (SUCCEEDED(shown) && choice == IDYES) ShowMessage(owner, L"The downloaded installer no longer passed verification and was deleted.");
+        DeleteExperimentalDownload(downloaded.file);
+        return;
+    }
+    if ((INT_PTR)ShellExecuteW(owner, L"open", downloaded.file.c_str(), nullptr, nullptr, SW_SHOWNORMAL) <= 32) {
+        ShowMessage(owner, L"Could not start the verified Seelen installer.");
+        DeleteExperimentalDownload(downloaded.file);
+    }
 }
 
 Installation FindInstallation(const std::wstring& executable) {
