@@ -1,9 +1,12 @@
-// HyperX wireless headsets and Pulsefire Haste 2 mice (HP VID 03F0, older Kingston VID 0951).
+// HyperX wireless headsets and Pulsefire Haste 2 / Dart mice (HP VID 03F0, older Kingston VID 0951).
 // Protocols: Pulsefire Haste 2 Core Wireless (03F0:0AB5), Haste 2 Wireless (03F0:0F98) and Haste 2 Mini (03F0:0DA0)
 // verified on hardware, see HasteWireless;
 // Cloud III Wireless verified on hardware (03F0:0C9D) and github.com/Medprj/HyperXWM;
 // Cloud III S from github.com/LennardKittner/HyperHeadset; Cloud Stinger Core from
 // github.com/davidsantanaalves/HyperBatteryMonitor (also Cloud Core Wireless DTS 0951:173F, verified on hardware);
+// Pulsefire Dart (0951:16E1, read on hardware) follows the reverse-engineering notes in
+// github.com/santeri3700/hyperx_pulsefire_dart_reverse_engineering (CC0), also implemented in
+// github.com/radoslavchobanov/PlasmaNGenuity (MIT), see PulsefireDart;
 // the others follow github.com/Sapd/HeadsetControl.
 #include "drivers.h"
 
@@ -165,6 +168,34 @@ bool HasteWireless(const HidColl& c, DeviceStatus& s) {
     return true;
 }
 
+// Pulsefire Dart (Kingston dongle 0951:16E1, vendor collection FF00 on interface 2): the "heartbeat"
+// query, a 64-byte zero-padded output report whose first byte is the command 0x51 (sent here with report ID 0).
+// The documented reply is the input report 51 00 00 03 <battery 0..100 %> <1 = charging> ...; bytes [6..10] are
+// undocumented, so no voltage is reported. The dongle can also answer 51 00 02 EC 05 00 ...: on a real 16E1 dongle
+// (2026-11-21) it did so in stretches of half a minute to minutes while NGENUITY showed 69%, trigger unknown. That
+// 05 is not a level (reading it as one showed 5%), so only the 00 00 03 layout gives a level; any other heartbeat
+// reply lists the mouse as asleep with an unknown level, and the tray keeps the last reading.
+// Source: community reverse engineering from NGENUITY captures (see the credits at the top of the file). Read on a
+// real 16E1 dongle on Windows: the collection is MI_02 FF00:0001 with 65-byte input/output/feature reports, and
+// the documented reply gave 69%, the level NGENUITY showed at the same time; charging not yet observed. The cable
+// variant (0951:16E2, FF13) is not handled. Protocol notes: docs/hyperx_pulsefire_dart.md.
+bool PulsefireDart(const HidColl& c, DeviceStatus& s) {
+    HidDev d;
+    if (!d.Open(c)) return false;
+    std::vector<BYTE> r;
+    auto heartbeat = [](const std::vector<BYTE>& r) { return r.size() >= 6 && r[0] == 0x51; };
+    if (!Query(d, { 0x00, 0x51 }, r, 1000, heartbeat)) return false;
+    s = Base(c.pid, L"HyperX Pulsefire Dart");
+    s.kind = DeviceKind::Mouse;
+    if (r[1] != 0x00 || r[2] != 0x00 || r[3] != 0x03 || r[4] > 100) {
+        s.asleep = true;  // answered without a level (e.g. 51 00 02 EC 05): keep the last reading
+        return true;
+    }
+    s.percent = r[4];
+    s.charging = r[5] == 0x01;
+    return true;
+}
+
 // Cloud Flight: 21 FF 05 -> [3..4] mV (above 0x100B means charging).
 bool CloudFlight(const HidColl& c, DeviceStatus& s) {
     HidDev d;
@@ -289,6 +320,10 @@ const Model kModels[] = {
     // Pulsefire Haste 2 Wireless (0F98 tested, 0D97 untested), Haste 2 Core Wireless (0AB5 tested) and Haste 2 Mini
     // (0DA0 tested) dongles.
     { 0x03F0, { 0x0AB5, 0x0D97, 0x0F98, 0x0DA0 }, [](const HidColl& c) { return c.page() >= 0xFF00 && c.outLen() >= 2 && c.inLen() >= 8; }, HasteWireless },
+    // Pulsefire Dart dongle (Kingston): vendor collection FF00:0001 on MI_02, 65-byte reports on Windows.
+    { 0x0951, { 0x16E1 }, [](const HidColl& c) {
+        return c.page() == 0xFF00 && c.outLen() >= 2 && c.inLen() >= 6;
+    }, PulsefireDart },
     { 0x0951, { 0x16C4, 0x1723, 0x1749 }, [](const HidColl& c) { return c.page() >= 0xFF00 && c.outLen() >= 3; }, CloudFlight },
     { 0x03F0, { 0x0E90 }, [](const HidColl& c) { return c.page() >= 0xFF00 && c.outLen() >= 3; }, CloudFlight },  // Cloud Flight (HP)
     // Cloud Stinger Core Wireless: PlayStation receivers (HP 0A93, Kingston 1713), the HP DTS receiver (0A8E), the
