@@ -147,6 +147,83 @@ void ApplyMenuTheme(bool light) {
     if (flush) flush();
 }
 
+// Small Windows 11 icons (Segoe Fluent Icons, Segoe MDL2 Assets on Windows 10) in the menu's icon column,
+// drawn in the menu's text colour for the light or dark theme. The menu stays the native Windows menu;
+// check marks and radio marks keep their own column. The bitmaps live until the object goes away.
+class MenuIcons {
+  public:
+    explicit MenuIcons(bool light) : light_(light) {
+        UINT dpi = GetDpiForWindow(g_hwnd);
+        size_ = MulDiv(16, dpi ? (int)dpi : 96, 96);
+        for (const wchar_t* face : { L"Segoe Fluent Icons", L"Segoe MDL2 Assets" }) {
+            HFONT f = CreateFontW(-size_, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                  ANTIALIASED_QUALITY, DEFAULT_PITCH, face);
+            HDC dc = CreateCompatibleDC(nullptr);
+            HGDIOBJ old = SelectObject(dc, f);
+            wchar_t got[LF_FACESIZE] = {};
+            GetTextFaceW(dc, LF_FACESIZE, got);
+            SelectObject(dc, old);
+            DeleteDC(dc);
+            if (!_wcsicmp(got, face)) { font_ = f; break; }
+            DeleteObject(f);
+        }
+    }
+    ~MenuIcons() {
+        for (HBITMAP b : bitmaps_) DeleteObject(b);
+        if (font_) DeleteObject(font_);
+    }
+    MenuIcons(const MenuIcons&) = delete;
+    MenuIcons& operator=(const MenuIcons&) = delete;
+
+    // `item` is a command id, or a position when `byPosition` (submenus have no command id).
+    void Set(HMENU menu, UINT item, bool byPosition, wchar_t glyph) {
+        HBITMAP b = Make(glyph);
+        if (!b) return;
+        MENUITEMINFOW mii{ sizeof(mii) };
+        mii.fMask = MIIM_BITMAP;
+        mii.hbmpItem = b;
+        SetMenuItemInfoW(menu, item, byPosition ? TRUE : FALSE, &mii);
+    }
+    void SetLast(HMENU menu, wchar_t glyph) { Set(menu, (UINT)GetMenuItemCount(menu) - 1, true, glyph); }
+
+  private:
+    HBITMAP Make(wchar_t glyph) {
+        if (!font_) return nullptr;
+        BITMAPINFO bi{};
+        bi.bmiHeader = { sizeof(BITMAPINFOHEADER), size_, -size_, 1, 32, BI_RGB };
+        void* bits = nullptr;
+        HDC dc = CreateCompatibleDC(nullptr);
+        HBITMAP bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+        if (!bmp) { DeleteDC(dc); return nullptr; }
+        HGDIOBJ ob = SelectObject(dc, bmp);
+        HGDIOBJ of = SelectObject(dc, font_);
+        memset(bits, 0, (size_t)size_ * size_ * 4);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(255, 255, 255));
+        RECT r{ 0, 0, size_, size_ };
+        wchar_t s[2] = { glyph, 0 };
+        DrawTextW(dc, s, 1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        GdiFlush();
+        // white-on-black coverage -> premultiplied alpha in the menu text colour
+        const int c = light_ ? 0x1B : 0xF2;
+        auto* p = static_cast<DWORD*>(bits);
+        for (int i = 0; i < size_ * size_; i++) {
+            int a = ((p[i] & 0xFF) + ((p[i] >> 8) & 0xFF) + ((p[i] >> 16) & 0xFF)) / 3;
+            int v = c * a / 255;
+            p[i] = ((DWORD)a << 24) | ((DWORD)v << 16) | ((DWORD)v << 8) | (DWORD)v;
+        }
+        SelectObject(dc, of);
+        SelectObject(dc, ob);
+        DeleteDC(dc);
+        bitmaps_.push_back(bmp);
+        return bmp;
+    }
+    bool light_;
+    int size_ = 16;
+    HFONT font_ = nullptr;
+    std::vector<HBITMAP> bitmaps_;
+};
+
 std::wstring ExePath() {
     wchar_t p[MAX_PATH];
     GetModuleFileNameW(nullptr, p, MAX_PATH);
@@ -826,6 +903,7 @@ void MoveEntry(const std::wstring& key, int dir) {
 
 void ShowMenu() {
     ApplyMenuTheme(g_lightTaskbar);
+    MenuIcons icons(g_lightTaskbar);  // freed after the menu closes
     HMENU m = CreatePopupMenu();
     std::vector<std::wstring> keys;  // device index -> device key; menu id ID_DEVICE_FIRST + index * DEV_STRIDE + command
     std::vector<TrayEntry*> all = OrderedEntries(false), shown = OrderedEntries(true);
@@ -845,6 +923,7 @@ void ShowMenu() {
         AppendMenuW(sub, MF_STRING | (canRight ? 0 : MF_GRAYED), base + DEV_RIGHT, g_wantWidget ? T(L"Move right") : T(L"Move down"));
         AppendMenuW(sub, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(sub, MF_STRING, base + DEV_RENAME, T(L"Rename device..."));
+        icons.SetLast(sub, 0xE8AC);  // Rename
         AppendMenuW(sub, MF_STRING | (g_aliases.count(k) ? 0 : MF_GRAYED),
                     base + DEV_RESET_NAME, T(L"Reset to original name"));
         HMENU alertMenu = CreatePopupMenu();
@@ -861,9 +940,12 @@ void ShowMenu() {
                         base + DEV_ALERT_FIRST + i, label.c_str());
         }
         AppendMenuW(sub, MF_POPUP, (UINT_PTR)alertMenu, T(L"Battery alerts"));
+        icons.SetLast(sub, 0xEA8F);  // Ringer
         AppendMenuW(sub, MF_STRING, base + DEV_HISTORY, T(L"Battery history..."));
+        icons.SetLast(sub, 0xE81C);  // History
         std::wstring line = DisplayName(*e) + L":  " + StatusText(*e) + L"   [" + T(e->st.via) + L"]";
         AppendMenuW(m, MF_POPUP | (IsHidden(k) ? 0 : MF_CHECKED), (UINT_PTR)sub, line.c_str());
+        icons.SetLast(m, widget::DeviceGlyph(e->st.kind, e->st.via == L"Bluetooth"));
         keys.push_back(k);
     }
     AppendMenuW(m, MF_STRING | (g_hideLastKnown ? MF_CHECKED : 0), ID_HIDE_LAST_KNOWN, T(L"Hide last known / asleep devices"));
@@ -897,6 +979,7 @@ void ShowMenu() {
         }
         CheckMenuRadioItem(sub, ID_MONITOR_ALL, ID_MONITOR_FIRST + 31, checked, MF_BYCOMMAND);
         AppendMenuW(m, MF_POPUP | (g_wantWidget ? 0 : MF_GRAYED), (UINT_PTR)sub, T(L"Show the widget on"));
+        icons.SetLast(m, 0xE7F4);  // TVMonitor
     }
     AppendMenuW(m, MF_STRING | (g_brandColors ? MF_CHECKED : 0), ID_BRAND_COLORS, T(L"Brand colors (Razer green, Logitech blue, ...)"));
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
@@ -917,6 +1000,7 @@ void ShowMenu() {
         AppendMenuW(sub, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(sub, MF_STRING, ID_LANG_ADD, T(L"Add your own language..."));
         AppendMenuW(m, MF_POPUP, (UINT_PTR)sub, T(L"Language"));
+        icons.SetLast(m, 0xE774);  // Globe
     }
     {
         HMENU sub = CreatePopupMenu();
@@ -931,6 +1015,7 @@ void ShowMenu() {
         }
         if (checked) CheckMenuRadioItem(sub, ID_POLL_FIRST, ID_POLL_FIRST + count - 1, checked, MF_BYCOMMAND);
         AppendMenuW(m, MF_POPUP, (UINT_PTR)sub, T(L"Check battery every"));
+        icons.SetLast(m, 0xE916);  // Stopwatch
     }
     AppendMenuW(m, MF_STRING, ID_REFRESH, T(L"Refresh now"));
     AppendMenuW(m, MF_STRING | (AutostartEnabled() ? MF_CHECKED : 0), ID_AUTOSTART, T(L"Start with Windows"));
@@ -943,11 +1028,27 @@ void ShowMenu() {
     AppendMenuW(m, updateFlags, ID_AUTO_UPDATE, T(L"Automatically check for updates"));
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING, ID_EXIT, T(L"Exit"));
+    icons.Set(m, ID_REFRESH, false, 0xE72C);         // Refresh
+    icons.Set(m, ID_REPORT, false, 0xE897);          // Help
+    icons.Set(m, ID_SUPPORT, false, 0xEB51);         // Heart
+    icons.Set(m, ID_UPDATE, false, 0xE777);          // UpdateRestore
+    icons.Set(m, ID_EXIT, false, 0xE711);            // Cancel
     POINT pt;
     GetCursorPos(&pt);
     SetForegroundWindow(g_hwnd);
-    UINT cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON | (i18n::Rtl() ? TPM_LAYOUTRTL : 0), pt.x, pt.y, 0,
-                              g_hwnd, nullptr);
+    // Opened from the taskbar, the menu must not overlap it: Windows only keeps a menu inside the monitor,
+    // so its last items (Exit) ended up under the taskbar. Excluding the taskbar's rectangle makes Windows
+    // open the menu above it (below / beside it for a top or side taskbar).
+    TPMPARAMS tpm{ sizeof(tpm) };
+    HWND under = GetAncestor(WindowFromPoint(pt), GA_ROOT);
+    wchar_t cls[32] = {};
+    if (under) GetClassNameW(under, cls, ARRAYSIZE(cls));
+    bool fromTaskbar = !wcscmp(cls, L"Shell_TrayWnd") || !wcscmp(cls, L"Shell_SecondaryTrayWnd");
+    if (fromTaskbar) GetWindowRect(under, &tpm.rcExclude);
+    bool sideBar = fromTaskbar && tpm.rcExclude.bottom - tpm.rcExclude.top > tpm.rcExclude.right - tpm.rcExclude.left;
+    UINT cmd = TrackPopupMenuEx(m, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON | (sideBar ? TPM_HORIZONTAL : TPM_VERTICAL) |
+                                       (i18n::Rtl() ? TPM_LAYOUTRTL : 0),
+                                pt.x, pt.y, g_hwnd, fromTaskbar ? &tpm : nullptr);
     PostMessageW(g_hwnd, WM_NULL, 0, 0);
     DestroyMenu(m);
     switch (cmd) {

@@ -22,6 +22,8 @@ struct WidgetItem {
 };
 
 namespace widget {
+// The Segoe Fluent Icons glyph the strip uses for a kind of device (also used by the menu).
+wchar_t DeviceGlyph(DeviceKind kind, bool bluetooth);
 // Creates the widget on the primary taskbar. Clicks are reported by posting `clickMsg` to `notifyWnd`.
 bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme);
 void Destroy();
