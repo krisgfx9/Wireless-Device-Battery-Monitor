@@ -7,6 +7,9 @@
 // 17-byte output/input report id 08: [08][cmd][0 x14][checksum], checksum = 0x55 - sum(bytes 0..15).
 //   cmd 03 = online status -> reply [6] = 1 when the mouse is connected to the dongle
 //   cmd 04 = battery       -> reply [6] = percent, [7] = charging, [8..9] = millivolts
+//   cmd 10 = ReadCIDMID    -> reply [2] = 0 (ok), [6] = customer id, [7] = model id. Only asked on Pulsar's
+//            vendor id, whose shared dongles ("8K Dongle Gen.2") do not name the mouse; see pulsar_models.h.
+//            Command number from Pulsar's web driver (bbb.pulsar.gg/cMouse) and github.com/DenzoNL/lamzuctl.
 // ATK VXE Dragonfly R1 family (receivers 3554:F58A / F58E / F505, cables F58C / F58F / F506) uses the same
 // protocol on vendor collection FF02:0002; its receivers expose several other 17-byte vendor collections
 // (FF03..FF06), so FF02:0002 is tried first. IDs and protocol from github.com/S1berla/vxe-r1-pro-max-battery,
@@ -15,8 +18,11 @@
 // Redragon ids from github.com/EliottV17/redragon-battery-omarchy and github.com/pingpingjinping/g49-web-control.
 // The older dual-mode M913 on the Areson 25A7:FA07 / FA08 receiver is handled by areson.cpp.
 #include "drivers.h"
+#include "pulsar_models.h"
 
 #include <algorithm>
+#include <map>
+#include <set>
 
 namespace {
 
@@ -44,7 +50,10 @@ bool IsHecateMouse(USHORT pid) { return pid == 0xD3FA || pid == 0xD3FB || pid ==
 
 bool IsCable(USHORT vid, USHORT pid) {
     bool hecate_cable = vid == 0x35BB && (pid == 0xD3FA || pid == 0xD3FC || pid == 0xD3FD);
-    return (vid == 0x33E4 && GWolvesIsCable(pid)) || hecate_cable ||
+    // Pulsar numbers its dongles 5xxx (5406, 5407, 5501...) and the mice on their cable 3xxx / 7xxx / 9xxx
+    // (pid lists in bbb.pulsar.gg/cMouse/cfg.json; 3510 = X2N CrazyLight verified).
+    bool pulsar_cable = vid == 0x3710 && (pid >> 12) != 5;
+    return (vid == 0x33E4 && GWolvesIsCable(pid)) || hecate_cable || pulsar_cable ||
            (vid == 0x3554 && (pid == 0xF55E || pid == 0xF58C || pid == 0xF58F || pid == 0xF506));
 }
 
@@ -84,6 +93,23 @@ std::wstring CleanName(std::wstring n, USHORT vid, USHORT pid) {
     return n;
 }
 
+// The last answer is kept so the name does not fall back to the dongle's while the mouse sleeps. A
+// dongle whose awake mouse ignores the request is not asked again: every miss costs the full reply timeout.
+std::wstring PulsarModel(HidDev& d, USHORT pid, bool awake) {
+    static std::map<USHORT, std::wstring> known;
+    static std::set<USHORT> silent;
+    std::vector<BYTE> r;
+    if (awake && !silent.count(pid)) {
+        if (!Query(d, 0x10, r)) {
+            silent.insert(pid);
+        } else if (r[2] == 0 && r[5] >= 2) {
+            const wchar_t* model = PulsarModelName(r[6], r[7]);
+            known[pid] = model ? model : L"";
+        }
+    }
+    return known[pid];
+}
+
 }  // namespace
 
 void PollKysona(PollContext& ctx) {
@@ -116,13 +142,13 @@ void PollKysona(PollContext& ctx) {
                 if (!d.Open(*c)) continue;
                 std::vector<BYTE> r;
                 DeviceStatus s;
-                bool answered = false;
+                bool answered = false, battery = false;
                 if (Query(d, 0x03, r)) {
                     answered = true;
                     s.connected = r[6] != 0;
                 }
                 if ((!answered || s.connected) && Query(d, 0x04, r)) {
-                    answered = true;
+                    answered = battery = true;
                     s.connected = true;
                     if (r[6] <= 100) s.percent = r[6];
                     s.charging = r[7] != 0;
@@ -136,7 +162,8 @@ void PollKysona(PollContext& ctx) {
                     break;
                 }
                 s.key = L"kysona:" + Hex4(vid) + L":" + Hex4(KeyPid(vid, pid));
-                s.name = CleanName(HidProduct(*c), vid, pid);
+                if (vid == 0x3710) s.name = PulsarModel(d, pid, battery);
+                if (s.name.empty()) s.name = CleanName(HidProduct(*c), vid, pid);
                 s.kind = KindFromCollections(ctx.colls, vid, pid);
                 if (s.kind == DeviceKind::Other) s.kind = DeviceKind::Mouse;
                 s.via = IsCable(vid, pid) ? L"USB cable" : L"2.4 GHz receiver";
