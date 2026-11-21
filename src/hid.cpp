@@ -98,6 +98,45 @@ bool HidDev::Write(const std::vector<BYTE>& data, int timeoutMs) {
     return done;
 }
 
+int HidDev::WriteAndRead(const std::vector<BYTE>& data, std::vector<BYTE>& buf, int timeoutMs,
+                         bool* writeSucceeded) {
+    if (writeSucceeded) *writeSucceeded = false;
+    if (!ok() || !overlapped_ || !c_.inLen() || !c_.outLen() || data.empty() || timeoutMs <= 0) return -1;
+
+    std::vector<BYTE> tmp(c_.inLen(), 0);
+    OVERLAPPED ov{};
+    ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!ov.hEvent) return -1;
+    DWORD got = 0;
+    bool started = ReadFile(h_, tmp.data(), (DWORD)tmp.size(), nullptr, &ov) != FALSE;
+    if (!started && GetLastError() != ERROR_IO_PENDING) {
+        CloseHandle(ov.hEvent);
+        return -1;
+    }
+
+    const ULONGLONG end = GetTickCount64() + (ULONGLONG)timeoutMs;
+    if (!Write(data, timeoutMs)) {
+        CancelIoEx(h_, &ov);
+        GetOverlappedResult(h_, &ov, &got, TRUE);
+        CloseHandle(ov.hEvent);
+        return -1;
+    }
+    if (writeSucceeded) *writeSucceeded = true;
+
+    const LONGLONG left = (LONGLONG)end - (LONGLONG)GetTickCount64();
+    bool done = left > 0 && WaitForSingleObject(ov.hEvent, (DWORD)left) == WAIT_OBJECT_0 &&
+                GetOverlappedResult(h_, &ov, &got, FALSE) != FALSE;
+    if (!done) {
+        CancelIoEx(h_, &ov);
+        done = GetOverlappedResult(h_, &ov, &got, TRUE) != FALSE;
+    }
+    CloseHandle(ov.hEvent);
+    if (!done || got == 0) return -1;
+    size_t off = tmp[0] == 0 ? 1 : 0;
+    buf.assign(tmp.begin() + off, tmp.begin() + got);
+    return (int)buf.size();
+}
+
 int HidDev::Read(std::vector<BYTE>& buf, int timeoutMs) {
     if (!ok() || !overlapped_ || !c_.inLen()) return -1;
     std::vector<BYTE> tmp(c_.inLen(), 0);

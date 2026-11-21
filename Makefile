@@ -112,6 +112,8 @@ test: test-update-core test-update-win test-update-signature
 	./build/xbox_bluetooth_identity_test.exe
 	$(CXX) $(CXXFLAGS) tests/jabra_driver_test.cpp src/drivers/jabra.cpp -o build/jabra_driver_test.exe
 	./build/jabra_driver_test.exe
+	$(CXX) $(CXXFLAGS) tests/pulsar_driver_test.cpp src/drivers/pulsar.cpp -o build/pulsar_driver_test.exe
+	./build/pulsar_driver_test.exe
 	$(CXX) -std=c++17 -O2 -Wall tests/gamesir_ble_protocol_test.cpp -o build/gamesir_ble_protocol_test.exe
 	./build/gamesir_ble_protocol_test.exe
 

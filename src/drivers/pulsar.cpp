@@ -16,9 +16,21 @@
 //   higher interfaces are tried first.
 //   No reliable charging register: on the cable the mouse is charging; 0% from a dongle means the
 //   mouse is off or out of range.
+// Pulsar PRO Dongle (3710:5405) uses a B4 status request/reply on its 65-byte Generic Desktop
+// collection. USBPcap captures provided in issue #911 show a zeroed B4 output report followed by a B4
+// input report with 84 40 at bytes 4..5, byte 1 matching the web utility's 100% reading and byte 6
+// changing from 0 to 1 on USB power: https://github.com/krisgfx9/Wireless-Device-Battery-Monitor/issues/911.
+// Follow-up diagnostics also captured 85 40 on the dongle while charging toggled.
+// The output report only requests status; it does not change device settings.
+// The same B4 exchange is visible on the wired ZYWOO mouse (3710:7401); its B4 reply uses markers
+// 84, 85, or 86 followed by 40.
 #include "drivers.h"
 
 #include <algorithm>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <set>
 
 namespace {
 
@@ -30,7 +42,49 @@ const Product kProducts[] = {
     { 0x3406, true, L"Pulsar X2 V3 eS" },
     { 0x5402, false, nullptr },  // 1K dongle
     { 0x5403, false, nullptr },  // 8K dongle
+    { 0x7401, true, nullptr },   // ZYWOO The Chosen X mouse over USB
+    { 0x5405, false, nullptr },  // PRO Dongle
 };
+
+std::map<std::wstring, std::unique_ptr<HidDev>> g_b4Devices;
+std::set<USHORT> g_knownB4Products;
+
+bool DecodeB4Battery(const std::vector<BYTE>& r, int& pct, bool& charging, bool directMouse) {
+    const bool markerValid = r.size() >= 7 &&
+                             (r[4] == 0x84 || r[4] == 0x85 || (directMouse && r[4] == 0x86));
+    if (!markerValid || r[0] != 0xB4 || r[1] > 100 || r[5] != 0x40 || r[6] > 1)
+        return false;
+    pct = r[1];
+    charging = r[6] != 0;
+    return true;
+}
+
+bool QueryB4Battery(HidDev& d, const HidColl& c, int& pct, bool& charging, bool directMouse) {
+    if (!d.ok() && !d.Open(c)) return false;
+
+    const ULONGLONG deadline = GetTickCount64() + 1000;
+    std::vector<BYTE> request(65, 0);
+    request[1] = 0xB4;
+    std::vector<BYTE> r;
+    int n = d.WriteAndRead(request, r, 1000);
+    if (n < 0) {
+        d.Close();
+        return false;
+    }
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        if (DecodeB4Battery(r, pct, charging, directMouse)) return true;
+        const ULONGLONG now = GetTickCount64();
+        if (now >= deadline) break;
+        const int timeoutMs = (int)std::min<ULONGLONG>(50, deadline - now);
+        n = d.Read(r, timeoutMs);
+        if (n < 0) {
+            d.Close();
+            return false;
+        }
+    }
+    d.Close();
+    return false;
+}
 
 enum class Reply { Battery, Offline, None };
 
@@ -68,8 +122,61 @@ Reply ReadBattery(HidDev& d, int& pct) {
 }  // namespace
 
 void PollPulsar(PollContext& ctx) {
+    std::set<std::wstring> presentB4Devices;
+    std::set<USHORT> enumeratedB4Products;
+    for (const HidColl& c : ctx.colls)
+        if (c.vid == kVid && (c.pid == 0x5405 || c.pid == 0x7401)) enumeratedB4Products.insert(c.pid);
+
     for (const Product& prod : kProducts) {
         if (ctx.IsClaimed(kVid, prod.pid)) continue;
+        if (prod.pid == 0x5405 || prod.pid == 0x7401) {
+            const bool directMouse = prod.pid == 0x7401;
+            bool matchingCollection = false;
+            bool reported = false;
+            for (const HidColl* c : ctx.Find(kVid, prod.pid, [](const HidColl& c) {
+                     return c.page() == 0x0001 && c.usage() == 0x0000 && c.inLen() == 65 && c.outLen() == 65;
+                 })) {
+                matchingCollection = true;
+                presentB4Devices.insert(c->path);
+                auto& slot = g_b4Devices[c->path];
+                const bool fresh = !slot;
+                if (fresh) {
+                    slot = std::make_unique<HidDev>();
+                    if (!slot->Open(*c)) {
+                        g_b4Devices.erase(c->path);
+                        continue;
+                    }
+                }
+                int pct = -1;
+                bool charging = false;
+                if (!QueryB4Battery(*slot, *c, pct, charging, directMouse)) continue;
+                g_knownB4Products.insert(prod.pid);
+                DeviceStatus s;
+                s.key = L"pulsar:" + Hex4(prod.pid);
+                const std::wstring productName = directMouse ? HidProduct(*c) : L"";
+                s.name = productName.empty() ? L"Pulsar wireless mouse" : productName;
+                s.kind = DeviceKind::Mouse;
+                s.via = directMouse ? L"USB cable" : L"2.4 GHz receiver";
+                s.percent = pct;
+                s.charging = charging;
+                s.graceSec = 1800;
+                ctx.Add(s, kVid, prod.pid);
+                reported = true;
+                break;
+            }
+            if (matchingCollection && !reported && !directMouse && g_knownB4Products.count(prod.pid)) {
+                // The receiver is present but a previously detected wireless mouse did not answer.
+                DeviceStatus s;
+                s.key = L"pulsar:" + Hex4(prod.pid);
+                s.name = L"Pulsar wireless mouse";
+                s.kind = DeviceKind::Mouse;
+                s.via = L"2.4 GHz receiver";
+                s.asleep = true;
+                s.graceSec = 1800;
+                ctx.Add(s, kVid, prod.pid);
+            }
+            continue;
+        }
         auto colls = ctx.Find(kVid, prod.pid, [](const HidColl& c) { return c.featLen() >= 65; });
         std::sort(colls.begin(), colls.end(), [](const HidColl* a, const HidColl* b) { return a->iface > b->iface; });
         for (const HidColl* c : colls) {
@@ -97,5 +204,18 @@ void PollPulsar(PollContext& ctx) {
             ctx.Add(s, kVid, prod.pid);
             break;
         }
+    }
+    for (auto it = g_b4Devices.begin(); it != g_b4Devices.end();)
+        it = presentB4Devices.count(it->first) ? std::next(it) : g_b4Devices.erase(it);
+
+    for (USHORT pid : g_knownB4Products) {
+        if (enumeratedB4Products.count(pid)) continue;
+        DeviceStatus s;
+        s.key = L"pulsar:" + Hex4(pid);
+        s.name = pid == 0x7401 ? L"Pulsar ZYWOO The Chosen X" : L"Pulsar wireless mouse";
+        s.kind = DeviceKind::Mouse;
+        s.via = pid == 0x7401 ? L"USB cable" : L"2.4 GHz receiver";
+        s.connected = false;
+        ctx.Add(s, kVid, pid);
     }
 }
