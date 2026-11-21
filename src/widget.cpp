@@ -15,6 +15,7 @@ bool g_light, g_hover;
 bool g_background;  // opaque rounded plate behind the text, for transparent / restyled taskbars
 bool g_stacked;     // icon above the percentage (menu option, PR #525)
 bool g_vertical;    // the primary taskbar is docked left or right: one block per device, stacked (PR #321)
+bool g_makeRoom = true;  // step past other apps' widgets in the taskbar instead of covering them
 std::vector<WidgetItem> g_items;
 std::wstring g_tipText;
 RECT g_lastTray{}, g_lastBar{}, g_lastWidgets{};
@@ -953,6 +954,12 @@ void SetStacked(bool on) {
     if (g_wnd) Reposition();
 }
 
+void SetMakeRoom(bool on) {
+    g_makeRoom = on;
+    g_lastW = -1;  // force a re-position
+    if (g_wnd) Reposition();
+}
+
 void SetMonitorChoice(const std::wstring& choice) {
     g_choice = choice.empty() ? L"all" : choice;
     SyncMirrors();  // adds, removes or hides strips right away
@@ -964,6 +971,42 @@ std::vector<MonitorOption> OtherMonitors() {
     for (HWND b : SecondaryTaskbars()) out.push_back({ MonitorId(b), MonitorLabel(b) });
     std::sort(out.begin(), out.end(), [](const MonitorOption& a, const MonitorOption& b) { return a.label < b.label; });
     return out;
+}
+
+// Other apps can put their own small windows into the taskbar next to the notification area (network
+// graphs, countdowns, ...). They are visible child windows of the taskbar owned by neither Explorer nor
+// us. Starting at `edge` (where the strip's trailing side would go), steps past every such window packed
+// against it, so the strips sit side by side. A window already sitting next to the edge keeps its spot
+// and the strip goes beside it. If another app does the same, the first of the two to re-position takes
+// the outer spot and the other one then stays put, so they settle within a second.
+int StepPastOtherWidgets(int edge, const RECT& bar, bool vertical, bool rtl) {
+    if (!g_makeRoom || !g_wnd) return edge;
+    DWORD explorer = 0, pid = 0;
+    GetWindowThreadProcessId(g_taskbar, &explorer);
+    const DWORD self = GetCurrentProcessId();
+    const LONG span = vertical ? bar.bottom - bar.top : bar.right - bar.left;
+    for (int pass = 0; pass < 8; pass++) {
+        bool moved = false;
+        for (HWND c = GetWindow(g_taskbar, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+            if (c == g_wnd || !IsWindowVisible(c)) continue;
+            GetWindowThreadProcessId(c, &pid);
+            RECT r;
+            if (pid == explorer || pid == self || !GetWindowRect(c, &r) || r.right <= r.left || r.bottom <= r.top) continue;
+            if ((vertical ? r.bottom - r.top : r.right - r.left) > span / 3) continue;  // not a small widget
+            if (vertical) {
+                if (r.right > bar.left && r.left < bar.right && r.bottom >= edge - Px(16) && r.bottom <= edge + Px(4) &&
+                    r.top < edge)
+                    edge = r.top, moved = true;
+            } else if (r.bottom > bar.top && r.top < bar.bottom) {
+                if (!rtl && r.right >= edge - Px(16) && r.right <= edge + Px(4) && r.left < edge)
+                    edge = r.left, moved = true;
+                else if (rtl && r.left <= edge + Px(16) && r.left >= edge - Px(4) && r.right > edge)
+                    edge = r.right, moved = true;
+            }
+        }
+        if (!moved) break;
+    }
+    return edge;
 }
 
 bool Reposition() {
@@ -987,7 +1030,7 @@ bool Reposition() {
         // the bar's width.
         RECT client{};
         GetClientRect(g_taskbar, &client);
-        POINT anchor{ bar.left, tr.top };
+        POINT anchor{ bar.left, StepPastOtherWidgets(tr.top, bar, true, false) };
         ScreenToClient(g_taskbar, &anchor);
         int top = anchor.y - g_size.cy - Px(2);
         DWORD offset = 0, osz = sizeof(offset);
@@ -1037,6 +1080,7 @@ bool Reposition() {
     if (wb.right > wb.left && wb.top < bar.bottom && wb.bottom > bar.top &&
         (rtl ? wb.left < edge + g_size.cx + Px(2) && wb.right > edge : wb.right > edge - g_size.cx - Px(2) && wb.left < edge))
         edge = rtl ? wb.right : wb.left;
+    edge = StepPastOtherWidgets(edge, bar, false, rtl);
     POINT p{ edge, bar.top };
     ScreenToClient(g_taskbar, &p);
     int left = p.x - g_size.cx - Px(2);
