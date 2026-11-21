@@ -165,6 +165,31 @@ bool HasteWireless(const HidColl& c, DeviceStatus& s) {
     return true;
 }
 
+// Original Pulsefire Haste Wireless (receiver and wired USB).
+// Command 00 51 00 -> reply 51 00 ... [4] battery %, [5] charging.
+bool HasteOriginal(const HidColl& c, DeviceStatus& s) {
+    HidDev d;
+    if (!d.Open(c)) return false;
+
+    std::vector<BYTE> r;
+    if (!Query(d, { 0x00, 0x51, 0x00 }, r, 1000,
+               [](const std::vector<BYTE>& r) {
+                   return r.size() >= 6 && r[0] == 0x51 && r[1] == 0x00;
+               })) {
+        return false;
+    }
+
+    if (r[4] > 100) return false;
+
+    s = Base(c.pid, L"HyperX Pulsefire Haste Wireless");
+    s.kind = DeviceKind::Mouse;
+    s.via = c.pid == 0x048E ? L"USB" : L"2.4 GHz receiver";
+    s.percent = r[4];
+    s.charging = r[5] == 0x01;
+
+    return true;
+}
+
 // Cloud Flight: 21 FF 05 -> [3..4] mV (above 0x100B means charging).
 bool CloudFlight(const HidColl& c, DeviceStatus& s) {
     HidDev d;
@@ -286,6 +311,10 @@ const Model kModels[] = {
     }, Cloud2Kingston },
     { 0x03F0, { 0x098D }, [](const HidColl& c) { return c.page() >= 0xFF00 && c.outLen() >= 3; }, CloudAlpha },
     { 0x03F0, { 0x08BE }, [](const HidColl& c) { return c.page() == 0xFF13 && c.usage() == 0xFF00; }, CloudAlpha2 },
+
+    // Original Pulsefire Haste Wireless (2.4 GHz receiver and USB).
+    { 0x03F0, { 0x028E, 0x048E }, [](const HidColl& c) { return c.page() == 0xFF00 && c.usage() == 0x0001 && c.outLen() >= 3 && c.inLen() >= 6;},HasteOriginal },
+    
     // Pulsefire Haste 2 Wireless (0F98 tested, 0D97 untested), Haste 2 Core Wireless (0AB5 tested) and Haste 2 Mini
     // (0DA0 tested) dongles.
     { 0x03F0, { 0x0AB5, 0x0D97, 0x0F98, 0x0DA0 }, [](const HidColl& c) { return c.page() >= 0xFF00 && c.outLen() >= 2 && c.inLen() >= 8; }, HasteWireless },
